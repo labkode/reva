@@ -1,48 +1,77 @@
-package storageprovidersvc
+package storageprovidergwsvc
 
 import (
-	"bytes"
-	"crypto/md5"
 	"fmt"
 	"io"
-	"os"
 	"path"
-	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/cernbox/reva/pkg/err"
 	"github.com/cernbox/reva/pkg/log"
 	"github.com/cernbox/reva/pkg/storage"
 	"github.com/cernbox/reva/pkg/storage/local"
+	"google.golang.org/grpc"
 
 	rpcpb "github.com/cernbox/go-cs3apis/cs3/rpc"
+	storagebrokerv0alphapb "github.com/cernbox/go-cs3apis/cs3/storagebroker/v0alpha"
 	storageproviderv0alphapb "github.com/cernbox/go-cs3apis/cs3/storageprovider/v0alpha"
 
-	"github.com/gofrs/uuid"
 	"github.com/mitchellh/mapstructure"
 	"golang.org/x/net/context"
 )
 
-var logger = log.New("storageprovidersvc")
-var errors = err.New("storageprovidersvc")
+var logger = log.New("storageprovidergwsvc")
+var errors = err.New("storageprovidergwsvc")
 
 type config struct {
-	Driver    string                 `mapstructure:"driver"`
-	MountPath string                 `mapstructure:"mount_path"`
-	MountID   string                 `mapstructure:"mount_id"`
-	TmpFolder string                 `mapstructure:"tmp_folder"`
-	EOS       map[string]interface{} `mapstructure:"eos"`
-	S3        map[string]interface{} `mapstructure:"s3"`
-	Local     map[string]interface{} `mapstructure:"local"`
-	Gateway   map[string]interface{} `mapstructure:"gw"`
+	MountPath string `mapstructure:"mount_path"`
+	MountID   string `mapstructure:"mount_id"`
+	Broker    string `mapstructure:"broker"`
 }
 
 type service struct {
-	storage            storage.FS
-	mountPath, mountID string
-	tmpFolder          string
+	c *config
+}
+
+func (s *service) getConn(uri string) (*grpc.ClientConn, error) {
+	conn, err := grpc.Dial(s.c.Broker, grpc.WithInsecure())
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (s *service) getBrokerClient() (storagebrokerv0alphapb.StorageBrokerServiceClient, error) {
+	conn, err := s.getConn(s.c.Broker)
+	if err != nil {
+		return nil, err
+	}
+
+	return storagebrokerv0alphapb.NewStorageBrokerServiceClient(conn), nil
+}
+
+func (s *service) getStorageClient(ctx context.Context, fn string) (storageproviderv0alphapb.StorageProviderServiceClient, error) {
+	brokerClient, err := s.getBrokerClient()
+	if err != nil {
+		return nil, err
+	}
+
+	req := &storagebrokerv0alphapb.FindRequest{Filename: fn}
+	res, err := brokerClient.Find(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.Status.Code != rpcpb.Code_CODE_OK {
+		return nil, errors.New("error obtaining storage provider from broker")
+	}
+
+	conn, err := s.getConn(res.StorageProvider.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	return storageproviderv0alphapb.NewStorageProviderServiceClient(conn), nil
 }
 
 // New creates a new storage provider svc
@@ -53,25 +82,8 @@ func New(m map[string]interface{}) (storageproviderv0alphapb.StorageProviderServ
 		return nil, errors.Wrap(err, "unable to parse config")
 	}
 
-	// use os temporary folder if empty
-	tmpFolder := c.TmpFolder
-	if tmpFolder == "" {
-		tmpFolder = os.TempDir()
-	}
-
-	mountPath := c.MountPath
-	mountID := c.MountID
-
-	fs, err := getFS(c)
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to obtain a filesystem")
-	}
-
 	service := &service{
-		storage:   fs,
-		tmpFolder: tmpFolder,
-		mountPath: mountPath,
-		mountID:   mountID,
+		c: c,
 	}
 
 	return service, nil
@@ -82,67 +94,47 @@ func (s *service) Deref(ctx context.Context, req *storageproviderv0alphapb.Deref
 }
 
 func (s *service) CreateDirectory(ctx context.Context, req *storageproviderv0alphapb.CreateDirectoryRequest) (*storageproviderv0alphapb.CreateDirectoryResponse, error) {
-	fn := req.Filename
-	fsfn, _, err := s.unwrap(ctx, fn)
+	client, err := s.getStorageClient(ctx, req.Filename)
 	if err != nil {
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INVALID}
-		res := &storageproviderv0alphapb.CreateDirectoryResponse{Status: status}
-		return res, nil
-	}
-
-	if err := s.storage.CreateDir(ctx, fsfn); err != nil {
-		if _, ok := err.(notFoundError); ok {
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_NOT_FOUND}
-			res := &storageproviderv0alphapb.CreateDirectoryResponse{Status: status}
-			return res, nil
-		}
-		err = errors.Wrap(err, "error creating folder "+fn)
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.CreateDirectoryResponse{Status: status}
 		return res, nil
 	}
 
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.CreateDirectoryResponse{Status: status}
+	res, err := client.CreateDirectory(ctx, req)
+	if err != nil {
+		logger.Error(ctx, err)
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.CreateDirectoryResponse{Status: status}
+		return res, nil
+	}
+
 	return res, nil
 }
 
 func (s *service) Delete(ctx context.Context, req *storageproviderv0alphapb.DeleteRequest) (*storageproviderv0alphapb.DeleteResponse, error) {
-	fn := req.GetFilename()
-
-	fsfn, _, err := s.unwrap(ctx, fn)
+	client, err := s.getStorageClient(ctx, req.Filename)
 	if err != nil {
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-		res := &storageproviderv0alphapb.DeleteResponse{Status: status}
-		return res, nil
-	}
-
-	if err := s.storage.Delete(ctx, fsfn); err != nil {
-		err := errors.Wrap(err, "error deleting file")
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.DeleteResponse{Status: status}
 		return res, nil
 	}
 
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.DeleteResponse{Status: status}
+	res, err := client.Delete(ctx, req)
+	if err != nil {
+		logger.Error(ctx, err)
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.DeleteResponse{Status: status}
+		return res, nil
+	}
 	return res, nil
 }
 
+// TODO(labkode): maybe plug here the cross storage copy
 func (s *service) Move(ctx context.Context, req *storageproviderv0alphapb.MoveRequest) (*storageproviderv0alphapb.MoveResponse, error) {
-	source := req.GetSourceFilename()
-	target := req.GetTargetFilename()
-
-	fss, _, err := s.unwrap(ctx, source)
-	if err != nil {
-		logger.Error(ctx, err)
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-		res := &storageproviderv0alphapb.MoveResponse{Status: status}
-		return res, nil
-	}
-	fst, _, err := s.unwrap(ctx, target)
+	sourceClient, err := s.getStorageClient(ctx, req.SourceFilename)
 	if err != nil {
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
@@ -150,115 +142,118 @@ func (s *service) Move(ctx context.Context, req *storageproviderv0alphapb.MoveRe
 		return res, nil
 	}
 
-	if err := s.storage.Move(ctx, fss, fst); err != nil {
-		err := errors.Wrap(err, "storageprovidersvc: error moving file")
+	targetClient, err := s.getStorageClient(ctx, req.TargetFilename)
+	if err != nil {
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.MoveResponse{Status: status}
 		return res, nil
 	}
 
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.MoveResponse{Status: status}
+	if sourceClient != targetClient {
+		logger.Error(ctx, err)
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_UNIMPLEMENTED}
+		res := &storageproviderv0alphapb.MoveResponse{Status: status}
+		return res, nil
+	}
+
+	res, err := sourceClient.Move(ctx, req)
+	if err != nil {
+		logger.Error(ctx, err)
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.MoveResponse{Status: status}
+		return res, nil
+	}
+
 	return res, nil
 }
 
 func (s *service) Stat(ctx context.Context, req *storageproviderv0alphapb.StatRequest) (*storageproviderv0alphapb.StatResponse, error) {
-	fn := req.GetFilename()
-
-	fsfn, fctx, err := s.unwrap(ctx, fn)
+	client, err := s.getStorageClient(ctx, req.Filename)
 	if err != nil {
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INVALID}
-		res := &storageproviderv0alphapb.StatResponse{Status: status}
-		return res, nil
-	}
-
-	md, err := s.storage.GetMD(ctx, fsfn)
-	if err != nil {
-		if _, ok := err.(notFoundError); ok {
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_NOT_FOUND}
-			res := &storageproviderv0alphapb.StatResponse{Status: status}
-			return res, nil
-		}
-		err := errors.Wrap(err, "error stating file")
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.StatResponse{Status: status}
 		return res, nil
 	}
-	md.Path = s.wrap(ctx, md.Path, fctx)
 
-	meta := s.toMeta(md)
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.StatResponse{Status: status, Metadata: meta}
+	res, err := client.Stat(ctx, req)
+	if err != nil {
+		logger.Error(ctx, err)
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.StatResponse{Status: status}
+		return res, nil
+	}
+
 	return res, nil
 }
 
 func (s *service) List(req *storageproviderv0alphapb.ListRequest, stream storageproviderv0alphapb.StorageProviderService_ListServer) error {
 	ctx := stream.Context()
-	fn := req.GetFilename()
 
-	fsfn, fctx, err := s.unwrap(ctx, fn)
+	client, err := s.getStorageClient(ctx, req.Filename)
 	if err != nil {
 		logger.Println(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.ListResponse{Status: status}
 		if err = stream.Send(res); err != nil {
-			return errors.Wrap(err, "error unwrapping")
+			return errors.Wrap(err, "error streaming response")
 		}
 		return nil
 	}
 
-	mds, err := s.storage.ListFolder(ctx, fsfn)
+	ss, err := client.List(ctx, req)
 	if err != nil {
-		err := errors.Wrap(err, "error listing folder")
-		logger.Error(ctx, err)
+		logger.Println(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.ListResponse{Status: status}
 		if err = stream.Send(res); err != nil {
-			return errors.Wrap(err, "storageprovidersvc: error streaming list response")
+			return errors.Wrap(err, "error streaming response")
 		}
 		return nil
 	}
 
-	for _, md := range mds {
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-		md.Path = s.wrap(ctx, md.Path, fctx)
-		meta := s.toMeta(md)
-		res := &storageproviderv0alphapb.ListResponse{
-			Status:   status,
-			Metadata: meta,
+	for {
+		res, err := ss.Recv()
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			logger.Println(ctx, err)
+			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+			res := &storageproviderv0alphapb.ListResponse{Status: status}
+			if err = stream.Send(res); err != nil {
+				return errors.Wrap(err, "error streaming response")
+			}
+			return nil
 		}
 
 		if err := stream.Send(res); err != nil {
-			return errors.Wrap(err, "error streaming list response")
+			return errors.Wrap(err, "error streaming response")
 		}
 	}
 
 	return nil
 }
 
-func (s *service) getSessionFolder(sessionID string) string {
-	return filepath.Join(s.tmpFolder, sessionID)
-}
-
 func (s *service) StartWriteSession(ctx context.Context, req *storageproviderv0alphapb.StartWriteSessionRequest) (*storageproviderv0alphapb.StartWriteSessionResponse, error) {
-	sessionID := uuid.Must(uuid.NewV4()).String()
-
-	// create temporary folder with sesion id to store
-	// future writes.
-	sessionFolder := s.getSessionFolder(sessionID)
-	if err := os.Mkdir(sessionFolder, 0755); err != nil {
-		err = errors.Wrap(err, "storageprovidersvc: error creating session folder")
+	client, err := s.getStorageClient(ctx, req.Filename)
+	if err != nil {
 		logger.Error(ctx, err)
-
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.StartWriteSessionResponse{Status: status}
 		return res, nil
 	}
 
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.StartWriteSessionResponse{Status: status, SessionId: sessionID}
+	res, err := client.StartWriteSession(ctx, req)
+	if err != nil {
+		logger.Error(ctx, err)
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.StartWriteSessionResponse{Status: status}
+		return res, nil
+	}
+
 	return res, nil
 }
 
@@ -267,6 +262,7 @@ func (s *service) Write(stream storageproviderv0alphapb.StorageProviderService_W
 	var numChunks int
 	var writtenBytes int64
 
+	var writeClient storageproviderv0alphapb.StorageProviderService_WriteClient
 	for {
 		req, err := stream.Recv()
 
@@ -288,177 +284,66 @@ func (s *service) Write(stream storageproviderv0alphapb.StorageProviderService_W
 			return nil
 		}
 
-		if req.SessionId == "" {
-			err = errors.New("sesssion id cannot be empty")
-			logger.Error(ctx, err)
+		if writeClient == nil {
+			client, err := s.getStorageClient(ctx, req.SessionId)
+			if err != nil {
+				status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+				res := &storageproviderv0alphapb.WriteResponse{Status: status}
+				if err = stream.SendAndClose(res); err != nil {
+					err = errors.Wrap(err, "error closing stream for write")
+					return err
+				}
+				return nil
+			}
+			wc, err := client.Write(ctx)
+			if err != nil {
+				status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+				res := &storageproviderv0alphapb.WriteResponse{Status: status}
+				if err = stream.SendAndClose(res); err != nil {
+					err = errors.Wrap(err, "error closing stream for write")
+					return err
+				}
+				return nil
+			}
+			writeClient = wc
+		}
 
+		if err := writeClient.Send(req); err != nil {
 			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 			res := &storageproviderv0alphapb.WriteResponse{Status: status}
 			if err = stream.SendAndClose(res); err != nil {
-				err = errors.Wrap(err, "error closing stream for write")
-				logger.Error(ctx, err)
+				err = errors.Wrap(err, "error streaming")
 				return err
 			}
 			return nil
 		}
-
-		sessionFolder := s.getSessionFolder(req.SessionId)
-		chunkFile := filepath.Join(sessionFolder, fmt.Sprintf("%d-%d", req.Offset, req.Length))
-		fd, err := os.OpenFile(chunkFile, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0600)
-		defer fd.Close()
-		if err != nil {
-			err = errors.Wrap(err, "error creating chunk file")
-			logger.Error(ctx, err)
-
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-			res := &storageproviderv0alphapb.WriteResponse{Status: status}
-			if err = stream.SendAndClose(res); err != nil {
-				err = errors.Wrap(err, "error closing stream for write")
-				return err
-			}
-			return nil
-		}
-
-		reader := bytes.NewReader(req.Data)
-		n, err := io.CopyN(fd, reader, int64(req.Length))
-		if err != nil {
-			err = errors.Wrap(err, "error writing chunk file")
-			logger.Error(ctx, err)
-
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-			res := &storageproviderv0alphapb.WriteResponse{Status: status}
-			if err = stream.SendAndClose(res); err != nil {
-				err = errors.Wrap(err, "error closing stream for write")
-				return err
-			}
-			return nil
-		}
-
-		numChunks++
-		writtenBytes += n
-		fd.Close()
 	}
 
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.WriteResponse{Status: status, WrittenBytes: uint64(writtenBytes), NumberChunks: uint64(numChunks)}
-	if err := stream.SendAndClose(res); err != nil {
-		err = errors.Wrap(err, "error closing stream for write")
-		return err
+	res, err := writeClient.CloseAndRecv()
+	if err != nil {
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.WriteResponse{Status: status}
+		if err = stream.SendAndClose(res); err != nil {
+			err = errors.Wrap(err, "error streaming")
+			return err
+		}
+		return nil
+	}
+
+	if res.Status.Code != rpcpb.Code_CODE_OK {
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.WriteResponse{Status: status}
+		if err = stream.SendAndClose(res); err != nil {
+			err = errors.Wrap(err, "error streaming")
+			return err
+		}
+		return nil
 	}
 	return nil
 }
 
 func (s *service) FinishWriteSession(ctx context.Context, req *storageproviderv0alphapb.FinishWriteSessionRequest) (*storageproviderv0alphapb.FinishWriteSessionResponse, error) {
-	sessionFolder := s.getSessionFolder(req.SessionId)
-
-	fd, err := os.Open(sessionFolder)
-	defer fd.Close()
-	if os.IsNotExist(err) {
-		err = errors.Wrap(err, "error opening session folder")
-		logger.Error(ctx, err)
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-		res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-		return res, nil
-	}
-
-	defer os.RemoveAll(sessionFolder) // remove txFolder once assembled file is returned
-
-	// list all the chunk files in the directory
-	names, err := fd.Readdirnames(0)
-	if err != nil {
-		err = errors.Wrap(err, "storageprovidersvc: error listing session folder")
-		logger.Error(ctx, err)
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-		res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-		return res, nil
-	}
-
-	// sort the chunks by offset so they are in order when they need to be assembled.
-	names = s.getSortedChunkSlice(names)
-
-	//l.Debug("chunk sorted names", zap.String("names", fmt.Sprintf("%+v", names)))
-	//l.Info("number of chunks", zap.String("nchunks", fmt.Sprintf("%d", len(names))))
-
-	rand := uuid.Must(uuid.NewV4()).String()
-	assembledFilename := filepath.Join(sessionFolder, fmt.Sprintf("assembled-%s", rand))
-	//l.Info("", zap.String("assembledfn", assembledFilename))
-
-	assembledFile, err := os.OpenFile(assembledFilename, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0600)
-	if err != nil {
-		err = errors.Wrap(err, "storageprovidersvc: error opening assembly file")
-		logger.Error(ctx, err)
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-		res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-		return res, nil
-	}
-
-	xs := md5.New()
-	for _, n := range names {
-		//l.Debug("processing chunk", zap.String("name", n), zap.Int("int", i))
-		chunkFilename := filepath.Join(sessionFolder, n)
-		//l.Info(fmt.Sprintf("processing chunk %d", i), zap.String("chunk", chunkFilename))
-
-		chunkInfo, err := parseChunkFilename(filepath.Base(chunkFilename))
-		if err != nil {
-			err = errors.Wrap(err, "storageprovidersvc: error parsing chunk fn")
-			logger.Error(ctx, err)
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-			res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-			return res, nil
-		}
-
-		chunk, err := os.Open(chunkFilename)
-		defer chunk.Close()
-		if err != nil {
-			err = errors.Wrap(err, "storageprovidersvc: error opening chunk file")
-			logger.Error(ctx, err)
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-			res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-			return res, nil
-		}
-
-		mw := io.MultiWriter(assembledFile, xs)
-		n, err := io.CopyN(mw, chunk, int64(chunkInfo.ClientLength))
-		if err != nil && err != io.EOF {
-			err = errors.Wrap(err, "error copying data to chunkfile")
-			logger.Error(ctx, err)
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-			res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-			return res, nil
-		}
-		if n != int64(chunkInfo.ClientLength) {
-			err := fmt.Errorf("chunk size in disk is different from chunk size sent from client. Read: %d Sent: %d", n, chunkInfo.ClientLength)
-			err = errors.Wrap(err, "chunk size is invalid")
-			logger.Error(ctx, err)
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-			res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-			return res, nil
-		}
-		chunk.Close()
-	}
-	assembledFile.Close()
-
-	fd, err = os.Open(assembledFilename)
-	if err != nil {
-		err = errors.Wrap(err, "error opening assembled file")
-		logger.Error(ctx, err)
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-		res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-		return res, nil
-	}
-
-	xsComputed := fmt.Sprintf("%x", xs.Sum(nil))
-	logger.Printf(ctx, "computed checksum: %s", xsComputed)
-	if req.Checksum != "" && "md5:"+xsComputed != req.Checksum {
-		err := fmt.Errorf("checksum mismatch between sent=%s and computed=%s", req.Checksum, xsComputed)
-		err = errors.Wrap(err, "file corrupted got corrupted")
-		logger.Error(ctx, err)
-		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-		res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
-		return res, nil
-	}
-
-	fsfn, _, err := s.unwrap(ctx, req.Filename)
+	client, err := s.getStorageClient(ctx, req.SessionId)
 	if err != nil {
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
@@ -466,120 +351,74 @@ func (s *service) FinishWriteSession(ctx context.Context, req *storageproviderv0
 		return res, nil
 	}
 
-	if err := s.storage.Upload(ctx, fsfn, fd); err != nil {
-		err = errors.Wrap(err, "error  uploading assembled file")
+	res, err := client.FinishWriteSession(ctx, req)
+	if err != nil {
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
 		return res, nil
 	}
 
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.FinishWriteSessionResponse{Status: status}
 	return res, nil
-}
-
-func (s *service) getSortedChunkSlice(names []string) []string {
-	// sort names numerically by chunk
-	sort.Slice(names, func(i, j int) bool {
-		previous := names[i]
-		next := names[j]
-
-		previousOffset, err := strconv.ParseInt(strings.Split(previous, "-")[0], 10, 64)
-		if err != nil {
-			panic("chunk name cannot be casted to int: " + previous)
-		}
-		nextOffset, err := strconv.ParseInt(strings.Split(next, "-")[0], 10, 64)
-		if err != nil {
-			panic("chunk name cannot be casted to int: " + next)
-		}
-		return previousOffset < nextOffset
-	})
-	return names
-}
-
-type chunkInfo struct {
-	Offset       uint64
-	ClientLength uint64
-}
-
-func parseChunkFilename(fn string) (*chunkInfo, error) {
-	parts := strings.Split(fn, "-")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("chunk fn is wrong: %s", fn)
-	}
-
-	offset, err := strconv.ParseUint(parts[0], 10, 64)
-	if err != nil {
-		return nil, err
-	}
-	clientLength, err := strconv.ParseUint(parts[1], 10, 64)
-	if err != nil {
-		return nil, err
-	}
-	return &chunkInfo{Offset: offset, ClientLength: clientLength}, nil
 }
 
 func (s *service) Read(req *storageproviderv0alphapb.ReadRequest, stream storageproviderv0alphapb.StorageProviderService_ReadServer) error {
 	ctx := stream.Context()
-	fsfn, _, err := s.unwrap(ctx, req.Filename)
+
+	client, err := s.getStorageClient(ctx, req.Filename)
 	if err != nil {
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.ReadResponse{Status: status}
 		if err = stream.Send(res); err != nil {
-			return errors.Wrap(err, "error streaming read response")
+			return errors.Wrap(err, "error streaming")
 		}
 		return nil
 	}
 
-	fd, err := s.storage.Download(ctx, fsfn)
+	readStream, err := client.Read(ctx, req)
 	if err != nil {
-		err = errors.Wrap(err, "storageprovidersvc: error downloading file")
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.ReadResponse{Status: status}
-		if err = stream.Send(res); err == nil {
-			return errors.Wrap(err, "storageprovidersvc: error streaming read response")
+		if err = stream.Send(res); err != nil {
+			return errors.Wrap(err, "error streaming")
 		}
 		return nil
 	}
 
-	// close fd when finish reading
-	// continue on failure
-	defer func() {
-		if err := fd.Close(); err != nil {
-			err = errors.Wrap(err, "storageprovidersvc: error closing fd after reading - leak")
-			logger.Error(ctx, err)
-		}
-	}()
-
-	// send data chunks of maximum 3 MiB
-	buffer := make([]byte, 1024*1024*3)
 	for {
-		n, err := fd.Read(buffer)
-		if n > 0 {
-			dc := &storageproviderv0alphapb.DataChunk{Data: buffer[:n], Length: uint64(n)}
-			status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-			res := &storageproviderv0alphapb.ReadResponse{Status: status, DataChunk: dc}
-			if err = stream.Send(res); err != nil {
-				return errors.Wrap(err, "storageprovidersvc: error streaming read response")
-			}
-			return nil
-		}
-
-		// nothing more to send
+		res, err := readStream.Recv()
 		if err == io.EOF {
 			break
 		}
 
 		if err != nil {
-			err = errors.Wrap(err, "storageprovidersvc: error reading from fd")
+			err = errors.Wrap(err, "error receiving from upstream")
 			logger.Error(ctx, err)
 			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 			res := &storageproviderv0alphapb.ReadResponse{Status: status}
 			if err = stream.Send(res); err != nil {
-				return errors.Wrap(err, "storageprovidersvc: error streaming read response")
+				return errors.Wrap(err, "error streaming")
+			}
+			return nil
+		}
+
+		if res.Status.Code != rpcpb.Code_CODE_OK {
+			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+			res := &storageproviderv0alphapb.ReadResponse{Status: status}
+			if err = stream.Send(res); err != nil {
+				return errors.Wrap(err, "error streaming")
+			}
+			return nil
+		}
+
+		if err := stream.Send(res); err != nil {
+			logger.Error(ctx, err)
+			status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+			res := &storageproviderv0alphapb.ReadResponse{Status: status}
+			if err = stream.Send(res); err != nil {
+				return errors.Wrap(err, "error streaming")
 			}
 			return nil
 		}
@@ -675,15 +514,22 @@ func (s *service) ReadVersion(req *storageproviderv0alphapb.ReadVersionRequest, 
 }
 
 func (s *service) RestoreVersion(ctx context.Context, req *storageproviderv0alphapb.RestoreVersionRequest) (*storageproviderv0alphapb.RestoreVersionResponse, error) {
-	if err := s.storage.RestoreRevision(ctx, req.Filename, req.VersionKey); err != nil {
-		err = errors.Wrap(err, "storageprovidersvc: error restoring version")
+	client, err := s.getStorageClient(ctx, req.Filename)
+	if err != nil {
 		logger.Error(ctx, err)
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.RestoreVersionResponse{Status: status}
 		return res, nil
 	}
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
-	res := &storageproviderv0alphapb.RestoreVersionResponse{Status: status}
+
+	res, err := client.RestoreVersion(ctx, req)
+	if err != nil {
+		logger.Error(ctx, err)
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.RestoreVersionResponse{Status: status}
+		return res, nil
+	}
+
 	return res, nil
 }
 
@@ -725,29 +571,32 @@ func (s *service) ListRecycle(req *storageproviderv0alphapb.ListRecycleRequest, 
 }
 
 func (s *service) RestoreRecycleItem(ctx context.Context, req *storageproviderv0alphapb.RestoreRecycleItemRequest) (*storageproviderv0alphapb.RestoreRecycleItemResponse, error) {
-	if err := s.storage.RestoreRecycleItem(ctx, req.Filename, req.RestoreKey); err != nil {
-		err = errors.Wrap(err, "storageprovidersvc: error restoring recycle item")
-		logger.Error(ctx, err)
+	client, err := s.getStorageClient(ctx, req.Filename)
+	if err != nil {
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.RestoreRecycleItemResponse{Status: status}
 		return res, nil
 	}
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.RestoreRecycleItemResponse{Status: status}
+
+	res, err := client.RestoreRecycleItem(ctx, req)
+	if err != nil {
+		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
+		res := &storageproviderv0alphapb.RestoreRecycleItemResponse{Status: status}
+		return res, nil
+	}
+
 	return res, nil
 }
 
 func (s *service) PurgeRecycle(ctx context.Context, req *storageproviderv0alphapb.PurgeRecycleRequest) (*storageproviderv0alphapb.PurgeRecycleResponse, error) {
-	if err := s.storage.EmptyRecycle(ctx, req.Filename); err != nil {
-		err = errors.Wrap(err, "storageprovidersvc: error purging recycle")
-		logger.Error(ctx, err)
+	client, err := s.getStorageClient(ctx, req.Filename)
+	if err != nil {
 		status := &rpcpb.Status{Code: rpcpb.Code_CODE_INTERNAL}
 		res := &storageproviderv0alphapb.PurgeRecycleResponse{Status: status}
 		return res, nil
 	}
-	status := &rpcpb.Status{Code: rpcpb.Code_CODE_OK}
-	res := &storageproviderv0alphapb.PurgeRecycleResponse{Status: status}
-	return res, nil
+
+	res, err := client.
 }
 
 func (s *service) SetACL(ctx context.Context, req *storageproviderv0alphapb.SetACLRequest) (*storageproviderv0alphapb.SetACLResponse, error) {

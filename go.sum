@@ -4,6 +4,8 @@ github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973 h1:xJ4a3vCFaGF/jqvzLM
 github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24TaqPxmxbtue+5NUziq4I4S80YR8gNf3Q=
 github.com/cernbox/go-cs3apis v0.0.0-20190131091639-e141d987d212 h1:1PnB1SyuGFLdva2HoaEGMHNb4QaFcDRNPoAUZZ2j1Co=
 github.com/cernbox/go-cs3apis v0.0.0-20190131091639-e141d987d212/go.mod h1:PhtmaQ6Ivutykhij6AjevimTEvuNeyT6Z7Yfyv1Rygg=
+github.com/cernbox/go-cs3apis v0.0.0-20190131172114-935c79bbb99d h1:VJ4rgPLvRpqFix9MOT1viD5nc1QRj0nb/UP3aTzBNso=
+github.com/cernbox/go-cs3apis v0.0.0-20190131172114-935c79bbb99d/go.mod h1:PhtmaQ6Ivutykhij6AjevimTEvuNeyT6Z7Yfyv1Rygg=
 github.com/cheggaaa/pb v1.0.27 h1:wIkZHkNfC7R6GI5w7l/PdAdzXzlrbcI3p8OAlnkTsnc=
 github.com/cheggaaa/pb v1.0.27/go.mod h1:pQciLPpbU0oxA0h+VJYYLxO+XeDQb5pZijXscXHm81s=
 github.com/cheggaaa/pb v2.0.6+incompatible h1:sutSx+mRaNbeJUMCAtyqNWU/tQ0B/xBm+hyb1JQmQYs=
