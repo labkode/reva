@@ -484,6 +484,22 @@ func (c *Client) GetQuota(ctx context.Context, username, path string) (*QuotaInf
 	return c.parseQuota(path, stdout)
 }
 
+// DumpQuotas is an admin command to dump all the quotas under a certain path, like /eos/user.
+// Runs wiht sudo privileges.
+func (c *Client) DumpQuotas(ctx context.Context, path string) (map[string]*QuotaInfo, error) {
+	unixUser, err := c.getUnixUser(rootUser)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, c.opt.EosBinary, "-r", unixUser.Uid, unixUser.Gid, "quota", "ls", "-p", path, "-m")
+	stdout, _, err := c.executeEOS(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return c.parseQuotas(path, stdout)
+}
+
 // Touch creates a 0-size,0-replica file in the EOS namespace.
 func (c *Client) Touch(ctx context.Context, username, path string) error {
 	unixUser, err := c.getUnixUser(username)
@@ -773,6 +789,44 @@ func (c Client) parseQuotaLine(line string) map[string]string {
 	m := getMap(partsBySpace)
 	return m
 }
+
+func (c *Client) parseQuotas(path, raw string) (map[string]*QuotaInfo, error) {
+	quotas := map[string]*QuotaInfo{}
+
+	rawLines := strings.Split(raw, "\n")
+	for _, rl := range rawLines {
+		if rl == "" {
+			continue
+		}
+
+		m := c.parseQuotaLine(rl)
+		space := m["space"]
+		if strings.HasPrefix(path, space) {
+			maxBytesString := m["maxlogicalbytes"]
+			usedBytesString := m["usedlogicalbytes"]
+			maxBytes, _ := strconv.ParseInt(maxBytesString, 10, 64)
+			usedBytes, _ := strconv.ParseInt(usedBytesString, 10, 64)
+
+			maxInodesString := m["maxfiles"]
+			usedInodesString := m["usedfiles"]
+			maxInodes, _ := strconv.ParseInt(maxInodesString, 10, 64)
+			usedInodes, _ := strconv.ParseInt(usedInodesString, 10, 64)
+
+			qi := &QuotaInfo{
+				AvailableBytes:  int(maxBytes),
+				UsedBytes:       int(usedBytes),
+				AvailableInodes: int(maxInodes),
+				UsedInodes:      int(usedInodes),
+			}
+
+			uid := m["uid"]
+			quotas[uid] = qi
+		}
+	}
+	return quotas, nil
+
+}
+
 func (c *Client) parseQuota(path, raw string) (*QuotaInfo, error) {
 	rawLines := strings.Split(raw, "\n")
 	for _, rl := range rawLines {
