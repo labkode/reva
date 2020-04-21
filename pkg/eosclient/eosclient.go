@@ -485,7 +485,7 @@ func (c *Client) GetQuota(ctx context.Context, username, path string) (*QuotaInf
 }
 
 // DumpQuotas is an admin command to dump all the quotas under a certain path, like /eos/user.
-// Runs wiht sudo privileges.
+// Runs with sudo privileges.
 func (c *Client) DumpQuotas(ctx context.Context, path string) (map[string]*QuotaInfo, error) {
 	unixUser, err := c.getUnixUser(rootUser)
 	if err != nil {
