@@ -43,8 +43,7 @@ require (
 	go.opencensus.io v0.22.4
 	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
-	google.golang.org/grpc v1.32.0
-	gopkg.in/cheggaaa/pb.v1 v1.0.27 // indirect
+	google.golang.org/grpc v1.33.2
 )
 
 go 1.13
