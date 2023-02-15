@@ -77,7 +77,113 @@ func (s *svc) Unprotected() []string {
 func (s *svc) routerInit() error {
 	s.router.Route("/v1.0/me/drives", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
+			payload := `
+{
+   "value":[
+      {
+         "description":"Subtitle",
+         "driveAlias":"/eos/project/c/cernbox",
+         "driveType":"project",
+         "id":"b1cd12df-349d-4084-a343-2ecc7aeff22e$b104d3cf-ab00-45fc-8b7d-5d92e7c96722",
+         "lastModifiedDateTime":"2023-02-15T14:21:14.372351719Z",
+         "name":"A Space",
+         "owner":{
+            "user":{
+               "displayName":"cernbox-admins",
+               "id":"b104d3cf-ab00-45fc-8b7d-5d92e7c96722"
+            }
+         },
+         "quota":{
+            "remaining":999999988,
+            "state":"normal",
+            "total":1000000000,
+            "used":12
+         },
+         "root":{
+            "eTag":"\"0d7e2dc1d7c21f70996344342464b765\"",
+            "id":"b1cd12df-349d-4084-a343-2ecc7aeff22e$b104d3cf-ab00-45fc-8b7d-5d92e7c96722",
+            "permissions":[
+               {
+                  "grantedToIdentities":[
+                     {
+                        "user":{
+                           "displayName":"Albert Einstein",
+                           "id":"4c510ada-c86b-4815-8820-42cdf82c3d51"
+                        }
+                     }
+                  ],
+                  "roles":[
+                     "manager"
+                  ]
+               }
+            ],
+            "webDavUrl":"https://qa.cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox"
+         },
+         "special":[
+            {
+               "eTag":"\"1ee3d6fe6cc57bca02579598b7f1ab83\"",
+               "file":{
+                  "mimeType":"text/markdown"
+               },
+               "id":"b1cd12df-349d-4084-a343-2ecc7aeff22e$b104d3cf-ab00-45fc-8b7d-5d92e7c96722!c92343c9-b3e0-4713-9f3b-f0a7f34964ed",
+               "lastModifiedDateTime":"2023-02-15T14:21:14.370703927Z",
+               "name":"readme.md",
+               "size":12,
+               "specialFolder":{
+                  "name":"readme"
+               },
+               "webDavUrl":"https://qa.cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox/.space/readme.md"
+            }
+         ],
+         "webUrl":"https://qa.cernbox.cern.ch"
+      },
+      {
+         "driveAlias":"/eos/user/g/gonzalhu",
+         "driveType":"personal",
+         "id":"b1cd12df-349d-4084-a343-2ecc7aeff22e$4c510ada-c86b-4815-8820-42cdf82c3d51",
+         "lastModifiedDateTime":"2023-02-15T13:59:44.21698901Z",
+         "name":"gonzalhu",
+         "owner":{
+            "user":{
+               "displayName":"Hugo Gonzalez",
+               "id":"4c510ada-c86b-4815-8820-42cdf82c3d51"
+            }
+         },
+         "quota":{
+            "remaining":50116665344,
+            "state":"normal",
+            "total":0,
+            "used":0
+         },
+         "root":{
+            "eTag":"\"8586495a490145412aa3699772d6350c\"",
+            "id":"b1cd12df-349d-4084-a343-2ecc7aeff22e$4c510ada-c86b-4815-8820-42cdf82c3d51",
+            "webDavUrl":"https://ocis.owncloud.test/dav/spaces/b1cd12df-349d-4084-a343-2ecc7aeff22e$4c510ada-c86b-4815-8820-42cdf82c3d51"
+         },
+         "webUrl":"https://ocis.owncloud.test/f/b1cd12df-349d-4084-a343-2ecc7aeff22e$4c510ada-c86b-4815-8820-42cdf82c3d51"
+      },
+      {
+         "driveAlias":"virtual/shares",
+         "driveType":"virtual",
+         "id":"a0ca6a90-a365-4782-871e-d44447bbc668$a0ca6a90-a365-4782-871e-d44447bbc668",
+         "name":"Shares",
+         "quota":{
+            "remaining":0,
+            "state":"exceeded",
+            "total":0,
+            "used":0
+         },
+         "root":{
+            "eTag":"DECAFC00FEE",
+            "id":"a0ca6a90-a365-4782-871e-d44447bbc668$a0ca6a90-a365-4782-871e-d44447bbc668",
+            "webDavUrl":"https://qa.cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/user/g/gonzalhu/"
+         },
+         "webUrl":"https://qa.cernbox.cern.ch"
+      }
+   ]
+}
+`
+			w.Write([]byte(payload))
 		 })
 	})
 	return nil

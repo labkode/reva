@@ -39,5 +39,6 @@ import (
 	_ "github.com/cs3org/reva/internal/http/services/siteacc"
 	_ "github.com/cs3org/reva/internal/http/services/sysinfo"
 	_ "github.com/cs3org/reva/internal/http/services/wellknown"
+	_ "github.com/cs3org/reva/internal/http/services/owncloud/drives"
 	// Add your own service here.
 )
