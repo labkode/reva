@@ -47,6 +47,7 @@ func (h *Handler) getCapabilitiesForUserAgent(ctx context.Context, userAgent str
 		}
 	}
 
+	setCapabilitiesForChunkProtocol(chunkV1, &c)
 	c.GroupBased.Capabilities = []string{}
 	for capability, groups := range h.groupBasedCapabilities {
 		if ctxUserBelongsToGroups(ctx, groups) {

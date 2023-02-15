@@ -117,7 +117,7 @@ func (s *svc) routerInit() error {
                   ]
                }
             ],
-            "webDavUrl":"https://qa.cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox"
+            "webDavUrl":"https://cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox"
          },
          "special":[
             {
@@ -132,10 +132,10 @@ func (s *svc) routerInit() error {
                "specialFolder":{
                   "name":"readme"
                },
-               "webDavUrl":"https://qa.cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox/.space/readme.md"
+               "webDavUrl":"https://cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox/.space/readme.md"
             }
          ],
-         "webUrl":"https://qa.cernbox.cern.ch"
+         "webUrl":"https://cernbox.cern.ch"
       },
       {
          "driveAlias":"/eos/user/g/gonzalhu",
@@ -158,9 +158,9 @@ func (s *svc) routerInit() error {
          "root":{
             "eTag":"\"8586495a490145412aa3699772d6350c\"",
             "id":"b1cd12df-349d-4084-a343-2ecc7aeff22e$4c510ada-c86b-4815-8820-42cdf82c3d51",
-            "webDavUrl":"https://ocis.owncloud.test/dav/spaces/b1cd12df-349d-4084-a343-2ecc7aeff22e$4c510ada-c86b-4815-8820-42cdf82c3d51"
+            "webDavUrl":"https://cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/user/g/gonzalhu/"
          },
-         "webUrl":"https://ocis.owncloud.test/f/b1cd12df-349d-4084-a343-2ecc7aeff22e$4c510ada-c86b-4815-8820-42cdf82c3d51"
+         "webUrl":"https://cernbox.cern.ch/files/spaces/eos/user/g/gonzalhu"
       },
       {
          "driveAlias":"virtual/shares",
@@ -176,9 +176,9 @@ func (s *svc) routerInit() error {
          "root":{
             "eTag":"DECAFC00FEE",
             "id":"a0ca6a90-a365-4782-871e-d44447bbc668$a0ca6a90-a365-4782-871e-d44447bbc668",
-            "webDavUrl":"https://qa.cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/user/g/gonzalhu/"
+            "webDavUrl":"https://cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/user/g/gonzalhu/"
          },
-         "webUrl":"https://qa.cernbox.cern.ch"
+         "webUrl":"https://cernbox.cern.ch"
       }
    ]
 }
