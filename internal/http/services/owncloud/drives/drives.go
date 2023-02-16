@@ -86,7 +86,7 @@ func (s *svc) routerInit() error {
          "driveType":"project",
          "id":"b1cd12df-349d-4084-a343-2ecc7aeff22e$b104d3cf-ab00-45fc-8b7d-5d92e7c96722",
          "lastModifiedDateTime":"2023-02-15T14:21:14.372351719Z",
-         "name":"A Space",
+         "name":"CERNBox",
          "owner":{
             "user":{
                "displayName":"cernbox-admins",
@@ -117,7 +117,7 @@ func (s *svc) routerInit() error {
                   ]
                }
             ],
-            "webDavUrl":"https://cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox"
+            "webDavUrl":"https://qa.cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/user/g/gonzalhu"
          },
          "special":[
             {
