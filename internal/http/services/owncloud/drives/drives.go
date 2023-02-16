@@ -117,7 +117,7 @@ func (s *svc) routerInit() error {
                   ]
                }
             ],
-            "webDavUrl":"https://cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox"
+            "webDavUrl":"https://cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox"
          },
          "special":[
             {
@@ -132,7 +132,7 @@ func (s *svc) routerInit() error {
                "specialFolder":{
                   "name":"readme"
                },
-               "webDavUrl":"https://cernbox.cernch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox/.space/readme.md"
+               "webDavUrl":"https://cernbox.cern.ch/cernbox/desktop/remote.php/webdav/eos/project/c/cernbox/.space/readme.md"
             }
          ],
          "webUrl":"https://cernbox.cern.ch"
