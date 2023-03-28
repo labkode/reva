@@ -75,6 +75,12 @@ func (s *svc) Unprotected() []string {
 }
 
 func (s *svc) routerInit() error {
+	s.router.Route("/migration", func(r chi.Router) {
+		r.Post("/", func(w http.ResponseWriter, r *http.Request) {
+			return	
+		})
+	})
+
 	s.router.Route("/v1.0/me/drives", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 			payload := `
