@@ -59,14 +59,20 @@ type config struct {
 	PermissionsEndpoint           string `mapstructure:"permissionssvc"`
 	CommitShareToStorageGrant     bool   `mapstructure:"commit_share_to_storage_grant"`
 	CommitShareToStorageRef       bool   `mapstructure:"commit_share_to_storage_ref"`
-	DisableHomeCreationOnLogin    bool   `mapstructure:"disable_home_creation_on_login"`
-	TransferSharedSecret          string `mapstructure:"transfer_shared_secret"`
-	TransferExpires               int64  `mapstructure:"transfer_expires"`
-	TokenManager                  string `mapstructure:"token_manager"`
+	// DisableHomeCreationOnLogin disables calling the CreateHome function, which is only
+	// useful when home creation happens outside Reva
+	DisableHomeCreationOnLogin bool `mapstructure:"disable_home_creation_on_login"`
+	// HomeLayout specificies the user home directory. Default is /home
+	HomeLayout string `mapstructure:"home_layout"`
+	// HomeMapping specifies with mount_path or mount_id should be used to find the
+	// storage provider dealing with creating homes
+	HomeMapping          string `mapstructure:"home_mapping"`
+	TransferSharedSecret string `mapstructure:"transfer_shared_secret"`
+	TransferExpires      int64  `mapstructure:"transfer_expires"`
+	TokenManager         string `mapstructure:"token_manager"`
 	// ShareFolder is the location where to create shares in the recipient's storage provider.
 	ShareFolder         string                            `mapstructure:"share_folder"`
 	DataTransfersFolder string                            `mapstructure:"data_transfers_folder"`
-	HomeMapping         string                            `mapstructure:"home_mapping"`
 	TokenManagers       map[string]map[string]interface{} `mapstructure:"token_managers"`
 	EtagCacheTTL        int                               `mapstructure:"etag_cache_ttl"`
 	AllowedUserAgents   map[string][]string               `mapstructure:"allowed_user_agents"` // map[path][]user-agent
@@ -84,7 +90,6 @@ func (c *config) ApplyDefaults() {
 	if c.TokenManager == "" {
 		c.TokenManager = "jwt"
 	}
-
 	// if services address are not specified we used the shared conf
 	// for the gatewaysvc to have dev setups very quickly.
 	c.AuthRegistryEndpoint = sharedconf.GetGatewaySVC(c.AuthRegistryEndpoint)
@@ -110,6 +115,10 @@ func (c *config) ApplyDefaults() {
 	// lifetime for the transfer token (TUS upload)
 	if c.TransferExpires == 0 {
 		c.TransferExpires = 100 * 60 // seconds
+	}
+
+	if c.HomeLayout == "" {
+		c.HomeLayout = "/home"
 	}
 }
 

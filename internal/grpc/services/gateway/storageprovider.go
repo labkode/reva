@@ -28,6 +28,7 @@ import (
 	"time"
 
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
+	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
@@ -39,6 +40,7 @@ import (
 	"github.com/cs3org/reva/pkg/rgrpc/status"
 	"github.com/cs3org/reva/pkg/rgrpc/todo/pool"
 	"github.com/cs3org/reva/pkg/storage/utils/etag"
+	"github.com/cs3org/reva/pkg/storage/utils/templates"
 	"github.com/cs3org/reva/pkg/utils"
 	"github.com/golang-jwt/jwt"
 	"github.com/google/uuid"
@@ -304,9 +306,33 @@ func (s *svc) GetHome(ctx context.Context, _ *provider.GetHomeRequest) (*provide
 	}, nil
 }
 
-func (s *svc) getHome(_ context.Context) string {
+// getHome returns the user home directory. It will panic if the user is not in the context,
+// which should never be the case and also avoid callers of this method to check for errors.
+func (s *svc) getHome(ctx context.Context) string {
+	log := appctx.GetLogger(ctx)
+
+	// obtain username from context and use configured
+	// template with user information to return a
+	// flexible home path
 	// TODO(labkode): issue #601, /home will be hardcoded.
-	return "/home"
+	u, err := getUser(ctx)
+	if err != nil {
+		panic(errors.Wrap(err, "eosfs: error getting user from context in getHome"))
+		return ""
+	}
+
+	layout := templates.WithUser(u, s.c.HomeLayout)
+	log.Info().Msgf("gateway: getHome: user=%v home=%s", u, layout)
+	return layout
+}
+
+func getUser(ctx context.Context) (*userpb.User, error) {
+	u, ok := appctx.ContextGetUser(ctx)
+	if !ok {
+		err := errors.Wrap(errtypes.UserRequired(""), "eosfs: error getting user from ctx")
+		return nil, err
+	}
+	return u, nil
 }
 
 func (s *svc) InitiateFileDownload(ctx context.Context, req *provider.InitiateFileDownloadRequest) (*gateway.InitiateFileDownloadResponse, error) {
