@@ -60,7 +60,7 @@ func init() {
 type config struct {
 	MountPath                       string                            `docs:"/;The path where the file system would be mounted."                                                           mapstructure:"mount_path"`
 	MountID                         string                            `docs:"-;The ID of the mounted file system."                                                                         mapstructure:"mount_id"`
-	Driver                          string                            `docs:"localhome;The storage driver to be used."                                                                     mapstructure:"driver"`
+	Driver                          string                            `docs:"eos;The storage driver to be used."                                                                     mapstructure:"driver"`
 	Drivers                         map[string]map[string]interface{} `docs:"url:pkg/storage/fs/localhome/localhome.go"                                                                    mapstructure:"drivers"`
 	TmpFolder                       string                            `docs:"/var/tmp;Path to temporary folder."                                                                           mapstructure:"tmp_folder"`
 	DataServerURL                   string                            `docs:"http://localhost/data;The URL for the data server."                                                           mapstructure:"data_server_url"`
@@ -545,15 +545,13 @@ func (s *service) GetPath(ctx context.Context, req *provider.GetPathRequest) (*p
 	return res, nil
 }
 
+// TODO(labkode): deprecate this method as the gateway returns the required information without needing to reach out
+// to storage providers.
 func (s *service) GetHome(ctx context.Context, req *provider.GetHomeRequest) (*provider.GetHomeResponse, error) {
-	home := path.Join(s.mountPath)
-
-	res := &provider.GetHomeResponse{
-		Status: status.NewOK(ctx),
-		Path:   home,
-	}
-
-	return res, nil
+	msg := "storageprovider: DEPRECATED: GetHome is not implemented"
+	return &provider.GetHomeResponse{
+		Status: status.NewUnimplemented(ctx, errors.New(msg), msg),
+	}, nil
 }
 
 func (s *service) CreateHome(ctx context.Context, req *provider.CreateHomeRequest) (*provider.CreateHomeResponse, error) {
