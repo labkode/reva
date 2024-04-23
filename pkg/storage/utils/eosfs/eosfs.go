@@ -62,8 +62,7 @@ import (
 )
 
 const (
-	refTargetAttrKey = "reva.target"
-	lwShareAttrKey   = "reva.lwshare"
+	lwShareAttrKey = "reva.lwshare"
 )
 
 const (
@@ -89,10 +88,6 @@ func (c *Config) ApplyDefaults() {
 		c.Namespace = "/"
 	}
 
-	if c.ShadowNamespace == "" {
-		c.ShadowNamespace = path.Join(c.Namespace, ".shadow")
-	}
-
 	// Quota node defaults to namespace if empty
 	if c.QuotaNode == "" {
 		c.QuotaNode = c.Namespace
@@ -108,9 +103,6 @@ func (c *Config) ApplyDefaults() {
 	if c.ShareFolder == "" {
 		c.ShareFolder = "/MyShares"
 	}
-	// ensure share folder always starts with slash
-	c.ShareFolder = path.Join("/", c.ShareFolder)
-
 	if c.EosBinary == "" {
 		c.EosBinary = "/usr/bin/eos"
 	}
@@ -251,6 +243,10 @@ func NewEOSFS(ctx context.Context, c *Config) (storage.FS, error) {
 	return eosfs, nil
 }
 
+// TODO(labkode): deprecate this method
+func (fs *eosfs) CreateReference(ctx context.Context, p string, targetURI *url.URL) error {
+	return errors.New("eosfs: CreateReference not implemented")
+}
 func (fs *eosfs) userIDcacheWarmup() {
 	if !fs.conf.EnableHome {
 		time.Sleep(2 * time.Second)
@@ -287,15 +283,16 @@ func getUser(ctx context.Context) (*userpb.User, error) {
 	return u, nil
 }
 
-func (fs *eosfs) getLayout(ctx context.Context) (layout string) {
+func (fs *eosfs) getLayout(ctx context.Context) string {
 	if fs.conf.EnableHome {
 		u, err := getUser(ctx)
 		if err != nil {
 			panic(err)
+			return ""
 		}
-		layout = templates.WithUser(u, fs.conf.UserLayout)
+		return templates.WithUser(u, fs.conf.UserLayout)
 	}
-	return
+	return ""
 }
 
 func (fs *eosfs) getInternalHome(ctx context.Context) (string, error) {
@@ -393,9 +390,7 @@ func (fs *eosfs) resolveRefForbidShareFolder(ctx context.Context, ref *provider.
 	if err != nil {
 		return "", eosclient.Authorization{}, errors.Wrap(err, "eosfs: error resolving reference")
 	}
-	if fs.isShareFolder(ctx, p) {
-		return "", eosclient.Authorization{}, errtypes.PermissionDenied("eosfs: cannot perform operation under the virtual share folder")
-	}
+
 	fn := fs.wrap(ctx, p)
 
 	u, err := getUser(ctx)
@@ -1255,13 +1250,6 @@ func (fs *eosfs) GetMD(ctx context.Context, ref *provider.Reference, mdKeys []st
 
 	p := ref.Path
 
-	// if path is home we need to add in the response any shadow folder in the shadow homedirectory.
-	if fs.conf.EnableHome {
-		if fs.isShareFolder(ctx, p) {
-			return fs.getMDShareFolder(ctx, p, mdKeys)
-		}
-	}
-
 	fn := fs.wrap(ctx, p)
 	eosFileInfo, err := fs.c.GetFileInfoByPath(ctx, auth, fn)
 	if err != nil {
@@ -1304,15 +1292,6 @@ func (fs *eosfs) ListFolder(ctx context.Context, ref *provider.Reference, mdKeys
 }
 
 func (fs *eosfs) listWithHome(ctx context.Context, p string) ([]*provider.ResourceInfo, error) {
-	if fs.isShareFolderRoot(ctx, p) {
-		return fs.listShareFolderRoot(ctx, p)
-	}
-
-	if fs.isShareFolderChild(ctx, p) {
-		return nil, errtypes.PermissionDenied("eos: error listing folders inside the shared folder, only file references are stored inside")
-	}
-
-	// path points to a resource in the nominal home
 	return fs.listWithNominalHome(ctx, p)
 }
 
@@ -1354,41 +1333,6 @@ func (fs *eosfs) listWithNominalHome(ctx context.Context, p string) (finfos []*p
 	return finfos, nil
 }
 
-func (fs *eosfs) listShareFolderRoot(ctx context.Context, p string) (finfos []*provider.ResourceInfo, err error) {
-	fn := fs.wrapShadow(ctx, p)
-
-	u, err := getUser(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "eosfs: no user in ctx")
-	}
-	// lightweight accounts don't have share folders, so we're passing an empty string as path
-	auth, err := fs.getUserAuth(ctx, u, "")
-	if err != nil {
-		return nil, err
-	}
-
-	eosFileInfos, err := fs.c.List(ctx, auth, fn)
-	if err != nil {
-		return nil, errors.Wrap(err, "eosfs: error listing")
-	}
-
-	for _, eosFileInfo := range eosFileInfos {
-		// filter out sys files
-		if !fs.conf.ShowHiddenSysFiles {
-			base := path.Base(eosFileInfo.File)
-			if hiddenReg.MatchString(base) {
-				continue
-			}
-		}
-
-		if finfo, err := fs.convertToFileReference(ctx, eosFileInfo); err == nil {
-			finfos = append(finfos, finfo)
-		}
-	}
-
-	return finfos, nil
-}
-
 // CreateStorageSpace creates a storage space.
 func (fs *eosfs) CreateStorageSpace(ctx context.Context, req *provider.CreateStorageSpaceRequest) (*provider.CreateStorageSpaceResponse, error) {
 	return nil, fmt.Errorf("unimplemented: CreateStorageSpace")
@@ -1419,45 +1363,13 @@ func (fs *eosfs) GetQuota(ctx context.Context, ref *provider.Reference) (uint64,
 	return qi.AvailableBytes, qi.UsedBytes, nil
 }
 
+// TODO(labkode): remove this method as the gateway nevers call GetHome on a storage provider.
 func (fs *eosfs) GetHome(ctx context.Context) (string, error) {
-	if !fs.conf.EnableHome {
-		return "", errtypes.NotSupported("eosfs: get home not supported")
-	}
-
-	// eos drive for homes assumes root(/) points to the user home.
-	return "/", nil
-}
-
-func (fs *eosfs) createShadowHome(ctx context.Context) error {
-	u, err := getUser(ctx)
-	if err != nil {
-		return errors.Wrap(err, "eosfs: no user in ctx")
-	}
-	rootAuth, err := fs.getRootAuth(ctx)
-	if err != nil {
-		return nil
-	}
-	home := fs.wrapShadow(ctx, "/")
-	shadowFolders := []string{fs.conf.ShareFolder}
-
-	for _, sf := range shadowFolders {
-		fn := path.Join(home, sf)
-		_, err = fs.c.GetFileInfoByPath(ctx, rootAuth, fn)
-		if err != nil {
-			if _, ok := err.(errtypes.IsNotFound); !ok {
-				return errors.Wrap(err, "eosfs: error verifying if shadow directory exists")
-			}
-			err = fs.createUserDir(ctx, u, fn, false)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+	panic(errors.New("eosfs: GetHome has been called from a storage provider"))
 }
 
 func (fs *eosfs) createNominalHome(ctx context.Context) error {
+	// obtains internal representation of the home if EnableHome is configured
 	home := fs.wrap(ctx, "/")
 
 	u, err := getUser(ctx)
@@ -1521,10 +1433,6 @@ func (fs *eosfs) CreateHome(ctx context.Context) error {
 
 	if err := fs.createNominalHome(ctx); err != nil {
 		return errors.Wrap(err, "eosfs: error creating nominal home")
-	}
-
-	if err := fs.createShadowHome(ctx); err != nil {
-		return errors.Wrap(err, "eosfs: error creating shadow home")
 	}
 
 	return nil
@@ -1601,9 +1509,7 @@ func (fs *eosfs) CreateDir(ctx context.Context, ref *provider.Reference) error {
 	if err != nil {
 		return errors.Wrap(err, "eosfs: error resolving reference")
 	}
-	if fs.isShareFolder(ctx, p) {
-		return errtypes.PermissionDenied("eosfs: cannot perform operation under the virtual share folder")
-	}
+
 	fn := fs.wrap(ctx, p)
 
 	u, err := getUser(ctx)
@@ -1635,62 +1541,10 @@ func (fs *eosfs) TouchFile(ctx context.Context, ref *provider.Reference) error {
 	return fs.c.Touch(ctx, auth, fn)
 }
 
-func (fs *eosfs) CreateReference(ctx context.Context, p string, targetURI *url.URL) error {
-	// TODO(labkode): for the time being we only allow creating references
-	// in the virtual share folder to not pollute the nominal user tree.
-	if !fs.isShareFolder(ctx, p) {
-		return errtypes.PermissionDenied("eosfs: cannot create references outside the share folder: share_folder=" + fs.conf.ShareFolder + " path=" + p)
-	}
-	u, err := getUser(ctx)
-	if err != nil {
-		return errors.Wrap(err, "eosfs: no user in ctx")
-	}
-
-	fn := fs.wrapShadow(ctx, p)
-
-	// TODO(labkode): with the grpc plugin we can create a file touching with xattrs.
-	// Current mechanism is: touch to hidden dir, set xattr, rename.
-	dir, base := path.Split(fn)
-	tmp := path.Join(dir, fmt.Sprintf(".sys.reva#.%s", base))
-	rootAuth, err := fs.getRootAuth(ctx)
-	if err != nil {
-		return nil
-	}
-
-	if err := fs.createUserDir(ctx, u, tmp, false); err != nil {
-		err = errors.Wrapf(err, "eosfs: error creating temporary ref file")
-		return err
-	}
-
-	// set xattr on ref
-	attr := &eosclient.Attribute{
-		Type: UserAttr,
-		Key:  refTargetAttrKey,
-		Val:  targetURI.String(),
-	}
-
-	if err := fs.c.SetAttr(ctx, rootAuth, attr, false, false, tmp); err != nil {
-		err = errors.Wrapf(err, "eosfs: error setting reva.ref attr on file: %q", tmp)
-		return err
-	}
-
-	// rename to have the file visible in user space.
-	if err := fs.c.Rename(ctx, rootAuth, tmp, fn); err != nil {
-		err = errors.Wrapf(err, "eosfs: error renaming from: %q to %q", tmp, fn)
-		return err
-	}
-
-	return nil
-}
-
 func (fs *eosfs) Delete(ctx context.Context, ref *provider.Reference) error {
 	p, err := fs.resolve(ctx, ref)
 	if err != nil {
 		return errors.Wrap(err, "eosfs: error resolving reference")
-	}
-
-	if fs.isShareFolder(ctx, p) {
-		return fs.deleteShadow(ctx, p)
 	}
 
 	fn := fs.wrap(ctx, p)
@@ -1707,28 +1561,6 @@ func (fs *eosfs) Delete(ctx context.Context, ref *provider.Reference) error {
 	return fs.c.Remove(ctx, auth, fn, false)
 }
 
-func (fs *eosfs) deleteShadow(ctx context.Context, p string) error {
-	if fs.isShareFolderRoot(ctx, p) {
-		return errtypes.PermissionDenied("eosfs: cannot delete the virtual share folder")
-	}
-
-	if fs.isShareFolderChild(ctx, p) {
-		fn := fs.wrapShadow(ctx, p)
-
-		// in order to remove the folder or the file without
-		// moving it to the recycle bin, we should take
-		// the privileges of the root
-		auth, err := fs.getRootAuth(ctx)
-		if err != nil {
-			return err
-		}
-
-		return fs.c.Remove(ctx, auth, fn, true)
-	}
-
-	return errors.New("eosfs: shadow delete of share folder that is neither root nor child. path=" + p)
-}
-
 func (fs *eosfs) Move(ctx context.Context, oldRef, newRef *provider.Reference) error {
 	oldPath, err := fs.resolve(ctx, oldRef)
 	if err != nil {
@@ -1738,10 +1570,6 @@ func (fs *eosfs) Move(ctx context.Context, oldRef, newRef *provider.Reference) e
 	newPath, err := fs.resolve(ctx, newRef)
 	if err != nil {
 		return errors.Wrap(err, "eosfs: error resolving reference")
-	}
-
-	if fs.isShareFolder(ctx, oldPath) || fs.isShareFolder(ctx, newPath) {
-		return fs.moveShadow(ctx, oldPath, newPath)
 	}
 
 	oldFn := fs.wrap(ctx, oldPath)
@@ -1757,34 +1585,6 @@ func (fs *eosfs) Move(ctx context.Context, oldRef, newRef *provider.Reference) e
 	}
 
 	return fs.c.Rename(ctx, auth, oldFn, newFn)
-}
-
-func (fs *eosfs) moveShadow(ctx context.Context, oldPath, newPath string) error {
-	if fs.isShareFolderRoot(ctx, oldPath) || fs.isShareFolderRoot(ctx, newPath) {
-		return errtypes.PermissionDenied("eosfs: cannot move/rename the virtual share folder")
-	}
-
-	// only rename of the reference is allowed, hence having the same basedir
-	bold, _ := path.Split(oldPath)
-	bnew, _ := path.Split(newPath)
-
-	if bold != bnew {
-		return errtypes.PermissionDenied("eosfs: cannot move references under the virtual share folder")
-	}
-
-	oldfn := fs.wrapShadow(ctx, oldPath)
-	newfn := fs.wrapShadow(ctx, newPath)
-
-	u, err := getUser(ctx)
-	if err != nil {
-		return errors.Wrap(err, "eosfs: no user in ctx")
-	}
-	auth, err := fs.getUserAuth(ctx, u, "")
-	if err != nil {
-		return err
-	}
-
-	return fs.c.Rename(ctx, auth, oldfn, newfn)
 }
 
 func (fs *eosfs) Download(ctx context.Context, ref *provider.Reference) (io.ReadCloser, error) {
@@ -2479,96 +2279,3 @@ func (fs *eosfs) getEosMetadata(finfo *eosclient.FileInfo) []byte {
 	v, _ := json.Marshal(sys)
 	return v
 }
-
-/*
-	Merge shadow on requests for /home ?
-
-	No - GetHome(ctx context.Context) (string, error)
-	No -CreateHome(ctx context.Context) error
-	No - CreateDir(ctx context.Context, fn string) error
-	No -Delete(ctx context.Context, ref *provider.Reference) error
-	No -Move(ctx context.Context, oldRef, newRef *provider.Reference) error
-	No -GetMD(ctx context.Context, ref *provider.Reference) (*provider.ResourceInfo, error)
-	Yes -ListFolder(ctx context.Context, ref *provider.Reference) ([]*provider.ResourceInfo, error)
-	No -Upload(ctx context.Context, ref *provider.Reference, r io.ReadCloser) error
-	No -Download(ctx context.Context, ref *provider.Reference) (io.ReadCloser, error)
-	No -ListRevisions(ctx context.Context, ref *provider.Reference) ([]*provider.FileVersion, error)
-	No -DownloadRevision(ctx context.Context, ref *provider.Reference, key string) (io.ReadCloser, error)
-	No -RestoreRevision(ctx context.Context, ref *provider.Reference, key string) error
-	No ListRecycle(ctx context.Context) ([]*provider.RecycleItem, error)
-	No RestoreRecycleItem(ctx context.Context, key string) error
-	No PurgeRecycleItem(ctx context.Context, key string) error
-	No EmptyRecycle(ctx context.Context) error
-	? GetPathByID(ctx context.Context, id *provider.Reference) (string, error)
-	No AddGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No RemoveGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No UpdateGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No ListGrants(ctx context.Context, ref *provider.Reference) ([]*provider.Grant, error)
-	No GetQuota(ctx context.Context) (int, int, error)
-	No CreateReference(ctx context.Context, path string, targetURI *url.URL) error
-	No Shutdown(ctx context.Context) error
-	No SetArbitraryMetadata(ctx context.Context, ref *provider.Reference, md *provider.ArbitraryMetadata) error
-	No UnsetArbitraryMetadata(ctx context.Context, ref *provider.Reference, keys []string) error
-*/
-
-/*
-	Merge shadow on requests for /home/MyShares ?
-
-	No - GetHome(ctx context.Context) (string, error)
-	No -CreateHome(ctx context.Context) error
-	No - CreateDir(ctx context.Context, fn string) error
-	Maybe -Delete(ctx context.Context, ref *provider.Reference) error
-	No -Move(ctx context.Context, oldRef, newRef *provider.Reference) error
-	Yes -GetMD(ctx context.Context, ref *provider.Reference) (*provider.ResourceInfo, error)
-	Yes -ListFolder(ctx context.Context, ref *provider.Reference) ([]*provider.ResourceInfo, error)
-	No -Upload(ctx context.Context, ref *provider.Reference, r io.ReadCloser) error
-	No -Download(ctx context.Context, ref *provider.Reference) (io.ReadCloser, error)
-	No -ListRevisions(ctx context.Context, ref *provider.Reference) ([]*provider.FileVersion, error)
-	No -DownloadRevision(ctx context.Context, ref *provider.Reference, key string) (io.ReadCloser, error)
-	No -RestoreRevision(ctx context.Context, ref *provider.Reference, key string) error
-	No ListRecycle(ctx context.Context) ([]*provider.RecycleItem, error)
-	No RestoreRecycleItem(ctx context.Context, key string) error
-	No PurgeRecycleItem(ctx context.Context, key string) error
-	No EmptyRecycle(ctx context.Context) error
-	?  GetPathByID(ctx context.Context, id *provider.Reference) (string, error)
-	No AddGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No RemoveGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No UpdateGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No ListGrants(ctx context.Context, ref *provider.Reference) ([]*provider.Grant, error)
-	No GetQuota(ctx context.Context) (int, int, error)
-	No CreateReference(ctx context.Context, path string, targetURI *url.URL) error
-	No Shutdown(ctx context.Context) error
-	No SetArbitraryMetadata(ctx context.Context, ref *provider.Reference, md *provider.ArbitraryMetadata) error
-	No UnsetArbitraryMetadata(ctx context.Context, ref *provider.Reference, keys []string) error
-*/
-
-/*
-	Merge shadow on requests for /home/MyShares/file-reference ?
-
-	No - GetHome(ctx context.Context) (string, error)
-	No -CreateHome(ctx context.Context) error
-	No - CreateDir(ctx context.Context, fn string) error
-	Maybe -Delete(ctx context.Context, ref *provider.Reference) error
-	Yes -Move(ctx context.Context, oldRef, newRef *provider.Reference) error
-	Yes -GetMD(ctx context.Context, ref *provider.Reference) (*provider.ResourceInfo, error)
-	No -ListFolder(ctx context.Context, ref *provider.Reference) ([]*provider.ResourceInfo, error)
-	No -Upload(ctx context.Context, ref *provider.Reference, r io.ReadCloser) error
-	No -Download(ctx context.Context, ref *provider.Reference) (io.ReadCloser, error)
-	No -ListRevisions(ctx context.Context, ref *provider.Reference) ([]*provider.FileVersion, error)
-	No -DownloadRevision(ctx context.Context, ref *provider.Reference, key string) (io.ReadCloser, error)
-	No -RestoreRevision(ctx context.Context, ref *provider.Reference, key string) error
-	No ListRecycle(ctx context.Context) ([]*provider.RecycleItem, error)
-	No RestoreRecycleItem(ctx context.Context, key string) error
-	No PurgeRecycleItem(ctx context.Context, key string) error
-	No EmptyRecycle(ctx context.Context) error
-	?  GetPathByID(ctx context.Context, id *provider.Reference) (string, error)
-	No AddGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No RemoveGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No UpdateGrant(ctx context.Context, ref *provider.Reference, g *provider.Grant) error
-	No ListGrants(ctx context.Context, ref *provider.Reference) ([]*provider.Grant, error)
-	No GetQuota(ctx context.Context) (int, int, error)
-	No CreateReference(ctx context.Context, path string, targetURI *url.URL) error
-	No Shutdown(ctx context.Context) error
-	Maybe SetArbitraryMetadata(ctx context.Context, ref *provider.Reference, md *provider.ArbitraryMetadata) error
-	Maybe UnsetArbitraryMetadata(ctx context.Context, ref *provider.Reference, keys []string) error
-*/
