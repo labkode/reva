@@ -200,6 +200,7 @@ func (s *svc) doHead(w http.ResponseWriter, r *http.Request) {
 		httpReq.URL.RawQuery = q.Encode()
 	}
 
+	log.Debug().Msgf("download http req = %+v", httpReq)
 	httpRes, err := httpClient.Do(httpReq)
 	if err != nil {
 		log.Error().Err(err).Msg("error doing HEAD request to data service")

@@ -318,7 +318,6 @@ func (s *svc) getHome(ctx context.Context) string {
 	u, err := getUser(ctx)
 	if err != nil {
 		panic(errors.Wrap(err, "eosfs: error getting user from context in getHome"))
-		return ""
 	}
 
 	layout := templates.WithUser(u, s.c.HomeLayout)
@@ -509,6 +508,8 @@ func versionKey(req *provider.InitiateFileDownloadRequest) string {
 }
 
 func (s *svc) initiateFileDownload(ctx context.Context, req *provider.InitiateFileDownloadRequest) (*gateway.InitiateFileDownloadResponse, error) {
+	log := appctx.GetLogger(ctx)
+
 	// TODO(ishank011): enable downloading references spread across storage providers, eg. /eos
 	c, err := s.find(ctx, req.Ref)
 	if err != nil {
@@ -544,7 +545,9 @@ func (s *svc) initiateFileDownload(ctx context.Context, req *provider.InitiateFi
 
 			// TODO(labkode): calculate signature of the whole request? we only sign the URI now. Maybe worth https://tools.ietf.org/html/draft-cavage-http-signatures-11
 			target := u.String()
-			token, err := s.sign(ctx, target, versionKey(req))
+			vk := versionKey(req)
+			log.Debug().Msgf("version to download = %s", vk)
+			token, err := s.sign(ctx, target, vk)
 			if err != nil {
 				return &gateway.InitiateFileDownloadResponse{
 					Status: status.NewInternal(ctx, err, "error creating signature for download"),

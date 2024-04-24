@@ -69,6 +69,8 @@ func GetOrHeadFile(w http.ResponseWriter, r *http.Request, fs storage.FS, spaceI
 	}
 	// TODO check preconditions like If-Range, If-Match ...
 
+	sublog.Info().Msgf("reference to download is = %+v", ref)
+
 	var (
 		md      *provider.ResourceInfo
 		content io.ReadCloser
@@ -84,6 +86,7 @@ func GetOrHeadFile(w http.ResponseWriter, r *http.Request, fs storage.FS, spaceI
 	mimeType := md.MimeType
 
 	if versionKey := r.URL.Query().Get("version_key"); versionKey != "" {
+		sublog.Info().Msgf("download is for a version file, version_key=%s", versionKey)
 		// the request is for a version file
 		stat, err := statRevision(ctx, fs, ref, versionKey)
 		if err != nil {

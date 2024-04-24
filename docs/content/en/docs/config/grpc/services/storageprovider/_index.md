@@ -24,11 +24,11 @@ mount_id = "-"
 {{< /highlight >}}
 {{% /dir %}}
 
-{{% dir name="driver" type="string" default="localhome" %}}
+{{% dir name="driver" type="string" default="eos" %}}
 The storage driver to be used. [[Ref]](https://github.com/cs3org/reva/tree/master/internal/grpc/services/storageprovider/storageprovider.go#L63)
 {{< highlight toml >}}
 [grpc.services.storageprovider]
-driver = "localhome"
+driver = "eos"
 {{< /highlight >}}
 {{% /dir %}}
 

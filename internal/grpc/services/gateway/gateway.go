@@ -62,7 +62,7 @@ type config struct {
 	// DisableHomeCreationOnLogin disables calling the CreateHome function, which is only
 	// useful when home creation happens outside Reva
 	DisableHomeCreationOnLogin bool `mapstructure:"disable_home_creation_on_login"`
-	// HomeLayout specificies the user home directory. Default is /home
+	// HomeLayout specifies the user home directory. Default is /home
 	HomeLayout string `mapstructure:"home_layout"`
 	// HomeMapping specifies with mount_path or mount_id should be used to find the
 	// storage provider dealing with creating homes

@@ -50,6 +50,7 @@ func (h *VersionsHandler) init(c *Config) error {
 func (h *VersionsHandler) Handler(s *svc, rid *provider.ResourceId) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		log := appctx.GetLogger(ctx).With().Interface("resourceid", rid).Logger()
 
 		if rid == nil {
 			http.Error(w, "404 Not Found", http.StatusNotFound)
@@ -63,6 +64,8 @@ func (h *VersionsHandler) Handler(s *svc, rid *provider.ResourceId) http.Handler
 
 		var key string
 		key, r.URL.Path = router.ShiftPath(r.URL.Path)
+
+		log.Debug().Msgf("dav/meta version handler. key = %s url=%s", key, r.URL.Path)
 		if r.Method == http.MethodOptions {
 			s.handleOptions(w, r)
 			return
@@ -226,6 +229,7 @@ func (h *VersionsHandler) doDownload(w http.ResponseWriter, r *http.Request, s *
 		return
 	}
 
+	sublog.Debug().Msgf("going to start version file with key = %s resource_id=%+v", key, rid)
 	resStat, err := client.Stat(ctx, &provider.StatRequest{
 		Ref: &provider.Reference{
 			ResourceId: rid,

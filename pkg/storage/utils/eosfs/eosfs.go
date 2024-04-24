@@ -243,7 +243,7 @@ func NewEOSFS(ctx context.Context, c *Config) (storage.FS, error) {
 	return eosfs, nil
 }
 
-// TODO(labkode): deprecate this method
+// TODO(labkode): deprecate this method.
 func (fs *eosfs) CreateReference(ctx context.Context, p string, targetURI *url.URL) error {
 	return errors.New("eosfs: CreateReference not implemented")
 }
@@ -288,7 +288,6 @@ func (fs *eosfs) getLayout(ctx context.Context) string {
 		u, err := getUser(ctx)
 		if err != nil {
 			panic(err)
-			return ""
 		}
 		return templates.WithUser(u, fs.conf.UserLayout)
 	}
