@@ -309,19 +309,6 @@ func (fs *eosfs) getInternalHome(ctx context.Context) (string, error) {
 	return relativeHome, nil
 }
 
-func (fs *eosfs) wrapShadow(ctx context.Context, fn string) (internal string) {
-	if fs.conf.EnableHome {
-		layout, err := fs.getInternalHome(ctx)
-		if err != nil {
-			panic(err)
-		}
-		internal = path.Join(fs.conf.ShadowNamespace, layout, fn)
-	} else {
-		internal = path.Join(fs.conf.ShadowNamespace, fn)
-	}
-	return
-}
-
 func (fs *eosfs) wrap(ctx context.Context, fn string) (internal string) {
 	if fs.conf.EnableHome {
 		layout, err := fs.getInternalHome(ctx)
@@ -458,20 +445,6 @@ func (fs *eosfs) getPath(ctx context.Context, id *provider.ResourceId) (string, 
 	}
 
 	return fs.unwrap(ctx, eosFileInfo.File)
-}
-
-func (fs *eosfs) isShareFolder(ctx context.Context, p string) bool {
-	return strings.HasPrefix(p, fs.conf.ShareFolder)
-}
-
-func (fs *eosfs) isShareFolderRoot(ctx context.Context, p string) bool {
-	return path.Clean(p) == fs.conf.ShareFolder
-}
-
-func (fs *eosfs) isShareFolderChild(ctx context.Context, p string) bool {
-	p = path.Clean(p)
-	vals := strings.Split(p, fs.conf.ShareFolder+"/")
-	return len(vals) > 1 && vals[1] != ""
 }
 
 func (fs *eosfs) GetPathByID(ctx context.Context, id *provider.ResourceId) (string, error) {
@@ -1258,25 +1231,6 @@ func (fs *eosfs) GetMD(ctx context.Context, ref *provider.Reference, mdKeys []st
 	return fs.convertToResourceInfo(ctx, eosFileInfo)
 }
 
-func (fs *eosfs) getMDShareFolder(ctx context.Context, p string, mdKeys []string) (*provider.ResourceInfo, error) {
-	fn := fs.wrapShadow(ctx, p)
-
-	auth, err := fs.getRootAuth(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	eosFileInfo, err := fs.c.GetFileInfoByPath(ctx, auth, fn)
-	if err != nil {
-		return nil, err
-	}
-
-	if fs.isShareFolderRoot(ctx, p) {
-		return fs.convertToResourceInfo(ctx, eosFileInfo)
-	}
-	return fs.convertToFileReference(ctx, eosFileInfo)
-}
-
 func (fs *eosfs) ListFolder(ctx context.Context, ref *provider.Reference, mdKeys []string) ([]*provider.ResourceInfo, error) {
 	p, err := fs.resolve(ctx, ref)
 	if err != nil {
@@ -1870,20 +1824,6 @@ func (fs *eosfs) convertToRevision(ctx context.Context, eosFileInfo *eosclient.F
 
 func (fs *eosfs) convertToResourceInfo(ctx context.Context, eosFileInfo *eosclient.FileInfo) (*provider.ResourceInfo, error) {
 	return fs.convert(ctx, eosFileInfo)
-}
-
-func (fs *eosfs) convertToFileReference(ctx context.Context, eosFileInfo *eosclient.FileInfo) (*provider.ResourceInfo, error) {
-	info, err := fs.convert(ctx, eosFileInfo)
-	if err != nil {
-		return nil, err
-	}
-	info.Type = provider.ResourceType_RESOURCE_TYPE_REFERENCE
-	val, ok := eosFileInfo.Attrs["reva.target"]
-	if !ok || val == "" {
-		return nil, errtypes.InternalError("eosfs: reference does not contain target: target=" + val + " file=" + eosFileInfo.File)
-	}
-	info.Target = val
-	return info, nil
 }
 
 // permissionSet returns the permission set for the current user.
