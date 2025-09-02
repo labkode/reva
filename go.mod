@@ -17,9 +17,8 @@ require (
 	github.com/cs3org/go-cs3apis v0.0.0-20250626104136-a0b31b323c48
 	github.com/dgraph-io/ristretto v0.2.0
 	github.com/dolthub/go-mysql-server v0.14.0
-	github.com/gdexlab/go-render v1.0.1
 	github.com/glpatcern/go-mime v0.0.0-20221026162842-2a8d71ad17a9
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-chi/chi/v5 v5.2.3
 	github.com/go-ldap/ldap/v3 v3.4.11
 	github.com/go-playground/locales v0.14.1
 	github.com/go-playground/universal-translator v0.18.1
