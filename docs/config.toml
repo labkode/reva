@@ -95,6 +95,9 @@ github_subdir = "docs"
 # Enable Algolia DocSearch - using the new params.search.algolia format
 [params.search]
 [params.search.algolia]
+appId = "7BYZEVPNK8"
+apiKey = "2053e1b952f9b081e4cb3f890421c506"
+indexName = "API docs"
 
 # User interface configuration
 [params.ui]
