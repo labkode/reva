@@ -92,12 +92,8 @@ github_subdir = "docs"
 # Google Custom Search Engine ID. Remove or comment out to disable search.
 # gcs_engine_id = "010913146518163072247:tinkle2veql"
 
-# Enable Algolia DocSearch - using the new params.search.algolia format
-[params.search]
-[params.search.algolia]
-appId = "7BYZEVPNK8"
-apiKey = "2053e1b952f9b081e4cb3f890421c506"
-indexName = "API docs"
+offlineSearch = true
+
 
 # User interface configuration
 [params.ui]
