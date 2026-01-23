@@ -31,7 +31,7 @@ import (
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 	"github.com/cs3org/reva/v3/pkg/appctx"
 
 	"github.com/cs3org/reva/v3/pkg/errtypes"
@@ -95,7 +95,7 @@ type MDFromEFSS struct {
 
 // New returns an implementation to of the storage.FS interface that talks to
 // a Nextcloud instance over http.
-func New(ctx context.Context, m map[string]interface{}) (storage.FS, error) {
+func New(ctx context.Context, m map[string]any) (storage.FS, error) {
 	var c StorageDriverConfig
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -267,8 +267,8 @@ func resInfoFromEFSS(respObj *MDFromEFSS) *provider.ResourceInfo {
 			Seconds: uint64(respObj.Mtime.Seconds),
 		},
 		Path: respObj.Path,
-		PermissionSet: conversions.RoleFromOCSPermissions(
-			conversions.Permissions(respObj.Permissions)).CS3ResourcePermissions(),
+		PermissionSet: permissions.RoleFromOCSPermissions(
+			permissions.OcsPermissions(respObj.Permissions)).CS3ResourcePermissions(),
 		Size: uint64(respObj.Size),
 		Owner: &user.UserId{
 			Idp:      respObj.Owner.Idp,
@@ -465,12 +465,12 @@ func (nc *StorageDriver) ListGrants(ctx context.Context, ref *provider.Reference
 
 	grants := make([]*provider.Grant, len(respMapArr))
 	for i := 0; i < len(respMapArr); i++ {
-		granteeMap := respMapArr[i]["grantee"].(map[string]interface{})
-		granteeIDMap := granteeMap["Id"].(map[string]interface{})
-		granteeIDUserIDMap := granteeIDMap["UserId"].(map[string]interface{})
+		granteeMap := respMapArr[i]["grantee"].(map[string]any)
+		granteeIDMap := granteeMap["Id"].(map[string]any)
+		granteeIDUserIDMap := granteeIDMap["UserId"].(map[string]any)
 
 		// if (granteeMap["Id"])
-		permsMap := respMapArr[i]["permissions"].(map[string]interface{})
+		permsMap := respMapArr[i]["permissions"].(map[string]any)
 		grants[i] = &provider.Grant{
 			Grantee: &provider.Grantee{
 				Type: provider.GranteeType_GRANTEE_TYPE_USER, // FIXME: support groups too

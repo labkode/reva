@@ -16,12 +16,13 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
+	"github.com/cs3org/reva/v3/pkg/appctx"
+	ocmconversions "github.com/cs3org/reva/v3/pkg/ocm/conversions"
 	"github.com/cs3org/reva/v3/pkg/spaces"
 	"github.com/cs3org/reva/v3/pkg/utils"
 	libregraph "github.com/owncloud/libre-graph-api-go"
 	"github.com/pkg/errors"
-	"github.com/rs/zerolog/log"
 )
 
 func (s *svc) shareToLibregraphPerm(ctx context.Context, share *GenericShare) (*libregraph.Permission, error) {
@@ -157,19 +158,16 @@ func (s *svc) buildGrantedToForRegularShare(ctx context.Context, grantee *provid
 }
 
 func (s *svc) buildGrantedToForOCMShare(ctx context.Context, grantee *provider.Grantee) (*libregraph.SharePointIdentitySet, error) {
-	grantedTo := libregraph.NewSharePointIdentitySet()
-
-	switch grantee.Type {
-	case provider.GranteeType_GRANTEE_TYPE_USER:
-		grantedTo.SetUser(libregraph.Identity{
-			Id:          libregraph.PtrString(grantee.GetUserId().OpaqueId),
-			DisplayName: grantee.GetUserId().OpaqueId + "@" + grantee.GetUserId().Idp,
-		})
-	case provider.GranteeType_GRANTEE_TYPE_GROUP:
-		return nil, errors.New("Groups are currently not supported in OCM shares")
+	gw, err := s.getClient()
+	if err != nil {
+		return nil, err
 	}
 
-	return grantedTo, nil
+	converter := ocmconversions.NewConverter(gw, &ocmconversions.Config{
+		WebBase: s.c.WebBase,
+	})
+
+	return converter.CS3GranteeToSharePointIdentitySet(ctx, grantee)
 }
 
 // The user must exist, otherwise an error is returned, this representation is used to show who
@@ -251,7 +249,7 @@ func LinkTypeToPermissions(lt libregraph.SharingLinkType, resourceType provider.
 	case libregraph.INTERNAL:
 		fallthrough
 	default:
-		return conversions.NewDeniedRole().CS3ResourcePermissions()
+		return permissions.NewDeniedRole().CS3ResourcePermissions()
 	}
 }
 
@@ -286,6 +284,19 @@ func (s *svc) cs3GranteeToSharePointIdentitySet(ctx context.Context, grantee *pr
 	}
 
 	return p, nil
+}
+
+func (s *svc) ocmGranteeToSharePointIdentitySet(ctx context.Context, grantee *provider.Grantee) (*libregraph.SharePointIdentitySet, error) {
+	gw, err := s.getClient()
+	if err != nil {
+		return nil, err
+	}
+
+	converter := ocmconversions.NewConverter(gw, &ocmconversions.Config{
+		WebBase: s.c.WebBase,
+	})
+
+	return converter.CS3GranteeToSharePointIdentitySet(ctx, grantee)
 }
 
 func (s *svc) cs3ReceivedShareToDriveItem(ctx context.Context, rsi *gateway.ReceivedShareResourceInfo) (*libregraph.DriveItem, error) {
@@ -438,97 +449,31 @@ func (s *svc) cs3ShareToDriveItem(ctx context.Context, info *provider.ResourceIn
 }
 
 func (s *svc) OCMReceivedShareToDriveItem(ctx context.Context, receivedOCMShare *ocm.ReceivedShare) (*libregraph.DriveItem, error) {
-	createdTime := utils.TSToTime(receivedOCMShare.Ctime)
-
-	grantee, err := s.cs3GranteeToSharePointIdentitySet(ctx, receivedOCMShare.Grantee)
+	gw, err := s.getClient()
 	if err != nil {
 		return nil, err
 	}
 
-	log.Debug().Interface("receivedOCMShare", receivedOCMShare).Msg("processing received OCM share")
+	converter := ocmconversions.NewConverter(gw, &ocmconversions.Config{
+		WebBase: s.c.WebBase,
+	})
 
-	var webdav_uri, webapp_uri, shared_secret string
-	for _, p := range receivedOCMShare.Protocols {
-		if p.GetWebdavOptions() != nil {
-			webdav_uri = p.GetWebdavOptions().GetUri()
-			shared_secret = p.GetWebdavOptions().GetSharedSecret()
-			log.Debug().Str("webdav_uri", webdav_uri).Str("shared_secret", shared_secret).Msg("processing webdav options")
-			break
-		} else if p.GetWebappOptions() != nil {
-			webapp_uri = p.GetWebappOptions().GetUri()
-			shared_secret = p.GetWebappOptions().GetSharedSecret()
-			log.Debug().Str("webapp_uri", webapp_uri).Str("shared_secret", shared_secret).Msg("processing webapp options")
-			break
-		} else {
-			log.Debug().Any("protocol", p).Msg("unknown access method, skipping")
+	// Create a wrapper function to convert UnifiedRoleDefinition
+	roleConverter := func(ctx context.Context, perms *provider.ResourcePermissions) *ocmconversions.UnifiedRoleDefinition {
+		role := CS3ResourcePermissionsToUnifiedRole(ctx, perms)
+		if role == nil {
+			return nil
+		}
+		return &ocmconversions.UnifiedRoleDefinition{
+			Id: role.Id,
 		}
 	}
 
-	// using mtime as a makeshift etag
-	etag := receivedOCMShare.Mtime.String()
-
-	roles := make([]string, 0, 1)
-	role := CS3ResourcePermissionsToUnifiedRole(ctx, receivedOCMShare.Protocols[0].GetWebdavOptions().GetPermissions().Permissions)
-	if role != nil {
-		roles = append(roles, *role.Id)
-	}
-
-	// TODO(lopresti) we need a proper display name here, which should come from shares.go
-	lgOCMUser := &libregraph.Identity{
-		DisplayName:        receivedOCMShare.Creator.OpaqueId + "@" + receivedOCMShare.Creator.Idp,
-		Id:                 libregraph.PtrString(receivedOCMShare.Creator.OpaqueId),
-		LibreGraphUserType: libregraph.PtrString("Federated"),
-	}
-
-	d := &libregraph.DriveItem{
-		UIHidden:          libregraph.PtrBool(false), // Doesn't exist for OCM shares
-		ClientSynchronize: libregraph.PtrBool(false),
-		CreatedBy: &libregraph.IdentitySet{
-			User: lgOCMUser,
-		},
-
-		ETag:                 &etag,
-		Id:                   libregraph.PtrString(receivedOCMShare.Id.OpaqueId),
-		LastModifiedDateTime: libregraph.PtrTime(utils.TSToTime(receivedOCMShare.Mtime)),
-		Name:                 libregraph.PtrString(receivedOCMShare.Name),
-		ParentReference: &libregraph.ItemReference{
-			DriveId:   libregraph.PtrString(spaces.ConcatStorageSpaceID(ShareJailID, ShareJailID)),
-			DriveType: libregraph.PtrString("virtual"),
-			Id:        libregraph.PtrString(spaces.EncodeResourceID(&provider.ResourceId{OpaqueId: ShareJailID, StorageId: ShareJailID, SpaceId: ShareJailID})),
-		},
-		RemoteItem: &libregraph.RemoteItem{
-			CreatedBy: &libregraph.IdentitySet{
-				User: lgOCMUser,
-			},
-			ETag:                 &etag,
-			Id:                   libregraph.PtrString(spaces.EncodeOCMShareID(receivedOCMShare.Id.OpaqueId)),
-			LastModifiedDateTime: libregraph.PtrTime(utils.TSToTime(receivedOCMShare.Mtime)),
-			WebUrl:               libregraph.PtrString(s.c.WebBase + "/ocm-share/" + receivedOCMShare.Name),
-			Name:                 libregraph.PtrString(receivedOCMShare.Name),
-			Permissions: []libregraph.Permission{
-				{
-					CreatedDateTime: *libregraph.NewNullableTime(&createdTime),
-					GrantedToV2:     grantee,
-					Invitation: &libregraph.SharingInvitation{
-						InvitedBy: &libregraph.IdentitySet{
-							User: lgOCMUser,
-						},
-					},
-					Roles: roles,
-				},
-			},
-			Size: libregraph.PtrInt64(int64(0)), // OCM shares do not have a size
-		},
-		Size: libregraph.PtrInt64(int64(0)),
-	}
-
-	if receivedOCMShare.ResourceType == provider.ResourceType_RESOURCE_TYPE_CONTAINER {
-		d.Folder = libregraph.NewFolder()
-	}
-	return d, nil
+	return converter.OCMReceivedShareToDriveItem(ctx, receivedOCMShare, roleConverter)
 }
 
 func (s *svc) cs3sharesToPermissions(ctx context.Context, shares []*GenericShare) ([]libregraph.Permission, error) {
+	log := appctx.GetLogger(ctx)
 	permissions := make([]libregraph.Permission, 0, len(shares))
 
 	for _, e := range shares {
@@ -587,6 +532,54 @@ func (s *svc) cs3sharesToPermissions(ctx context.Context, shares []*GenericShare
 
 			permissions = append(permissions, permisison)
 
+		} else if e.ocmshare != nil {
+			createdTime := utils.TSToTime(e.ocmshare.Ctime)
+
+			creator, err := s.getUserByID(ctx, e.ocmshare.Creator)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to convert cs3 ocm share to permission in ocgraph - ignoring this share")
+				continue
+			}
+
+			grantee, err := s.ocmGranteeToSharePointIdentitySet(ctx, e.ocmshare.Grantee)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to convert cs3 ocm share to permission in ocgraph - ignoring this share")
+				continue
+			}
+			roles := make([]string, 0, 1)
+			if len(e.ocmshare.AccessMethods) == 0 {
+				log.Warn().Msg("Found an OCM share without access methods in cs3sharesToPermissions - ignoring this share")
+				continue
+			}
+			// Go through the different access methods to find the webdav permissions
+			// We assume that all access methods have the same permissions, so we break
+			// after the first match
+			// TODO(rwelande): maybe in the future we want to show different permissions for
+			// different access methods
+			for _, am := range e.ocmshare.AccessMethods {
+				if am.GetWebdavOptions() != nil && am.GetWebdavOptions().GetPermissions() != nil {
+					role := CS3ResourcePermissionsToUnifiedRole(ctx, am.GetWebdavOptions().GetPermissions())
+					if role != nil {
+						roles = append(roles, *role.Id)
+					}
+					break
+				}
+			}
+			permissions = append(permissions, libregraph.Permission{
+				CreatedDateTime: *libregraph.NewNullableTime(&createdTime),
+				GrantedToV2:     grantee,
+				Invitation: &libregraph.SharingInvitation{
+					InvitedBy: &libregraph.IdentitySet{
+						User: &libregraph.Identity{
+							DisplayName: creator.DisplayName,
+							Id:          libregraph.PtrString(creator.Id.OpaqueId),
+						},
+					},
+				},
+				Roles: roles,
+			})
+		} else {
+			log.Warn().Msg("Found a nil share in cs3sharesToPermissions - ignoring this share")
 		}
 	}
 

@@ -108,7 +108,7 @@ type wopiProvider struct {
 
 // New returns an implementation of the app.Provider interface that
 // connects to an application in the backend.
-func New(ctx context.Context, m map[string]interface{}) (app.Provider, error) {
+func New(ctx context.Context, m map[string]any) (app.Provider, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -194,9 +194,9 @@ func (p *wopiProvider) GetAppURL(ctx context.Context, resource *provider.Resourc
 			log.Warn().Interface("resId", resource.Id).Interface("path", resource.Path).Err(pathErr).Msg("wopi: failed to extract relative path from public link scope")
 		}
 	case ocmrole:
-		// OCM users have no username: use displayname@Idp
+		// build a username for OCM users as "userid at idp"
 		ut = ocm
-		q.Add("username", u.DisplayName+" @ "+u.Id.Idp)
+		q.Add("username", utils.PrintOCMUserId(u.Id))
 		// and resolve the folder
 		rPath, pathErr = getPathForExternalLink(ctx, scopes, resource, ocmLinkURLPrefix)
 		if pathErr != nil {
@@ -234,13 +234,17 @@ func (p *wopiProvider) GetAppURL(ctx context.Context, resource *provider.Resourc
 	}
 	q.Add("usertype", string(ut))
 
+	access := "view"
+	if viewMode == appprovider.ViewMode_VIEW_MODE_EMBEDDED {
+		access = "embedview"
+	}
 	var viewAppURL string
-	if viewAppURLs, ok := p.appURLs["view"]; ok {
+	if viewAppURLs, ok := p.appURLs[access]; ok {
 		if viewAppURL, ok = viewAppURLs[ext]; ok {
 			q.Add("appviewurl", viewAppURL)
 		}
 	}
-	var access = "edit"
+	access = "edit"
 	if resource.GetSize() == 0 {
 		if _, ok := p.appURLs["editnew"]; ok {
 			access = "editnew"
@@ -296,7 +300,7 @@ func (p *wopiProvider) GetAppURL(ctx context.Context, resource *provider.Resourc
 		return nil, errors.New(sbody)
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	err = json.Unmarshal(body, &result)
 	if err != nil {
 		return nil, err
@@ -326,7 +330,7 @@ func (p *wopiProvider) GetAppURL(ctx context.Context, resource *provider.Resourc
 	// we decide whether the request method is POST or GET
 	var formParams map[string]string
 	method := http.MethodGet
-	if form, ok := result["form-parameters"].(map[string]interface{}); ok {
+	if form, ok := result["form-parameters"].(map[string]any); ok {
 		if tkn, ok := form["access_token"].(string); ok {
 			formParams = map[string]string{
 				"access_token":     tkn,
@@ -429,11 +433,13 @@ func getAppURLs(c *config) (map[string]map[string]string, error) {
 		appURLs = make(map[string]map[string]string)
 		appURLs["view"] = make(map[string]string)
 		appURLs["edit"] = make(map[string]string)
+		appURLs["embedview"] = make(map[string]string)
 		for _, m := range c.MimeTypes {
 			exts := mime.GetFileExts(m)
 			for _, e := range exts {
 				appURLs["view"]["."+e] = c.AppURL
 				appURLs["edit"]["."+e] = c.AppURL
+				appURLs["embedview"]["."+e] = c.AppURL
 			}
 		}
 	}
@@ -442,7 +448,7 @@ func getAppURLs(c *config) (map[string]map[string]string, error) {
 
 func (p *wopiProvider) getAccessTokenTTL(ctx context.Context) (string, error) {
 	tkn := appctx.ContextMustGetToken(ctx)
-	token, err := jwt.ParseWithClaims(tkn, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tkn, &jwt.RegisteredClaims{}, func(token *jwt.Token) (any, error) {
 		return []byte(p.conf.JWTSecret), nil
 	})
 	if err != nil {
@@ -474,7 +480,7 @@ func parseWopiDiscovery(body io.Reader) (map[string]map[string]string, error) {
 			for _, app := range netzone.SelectElements("app") {
 				for _, action := range app.SelectElements("action") {
 					access := action.SelectAttrValue("name", "")
-					if access == "view" || access == "edit" || access == "editnew" {
+					if access == "view" || access == "edit" || access == "editnew" || access == "embedview" {
 						ext := action.SelectAttrValue("ext", "")
 						urlString := action.SelectAttrValue("urlsrc", "")
 

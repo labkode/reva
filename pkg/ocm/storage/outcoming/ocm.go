@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/app/provider/v1beta1"
@@ -35,7 +36,7 @@ import (
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/cs3org/reva/v3/internal/http/services/datagateway"
 	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocdav"
-	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 
 	"github.com/cs3org/reva/v3/pkg/appctx"
 	"github.com/cs3org/reva/v3/pkg/errtypes"
@@ -70,7 +71,7 @@ func (c *config) ApplyDefaults() {
 
 // New creates an OCM storage driver.
 // This driver exposes local resources to remote OCM users.
-func New(ctx context.Context, m map[string]interface{}) (storage.FS, error) {
+func New(ctx context.Context, m map[string]any) (storage.FS, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -311,9 +312,9 @@ func getPermissionsFromShare(share *ocmv1beta1.Share) *provider.ResourcePermissi
 		case *ocmv1beta1.AccessMethod_WebappOptions:
 			mode := v.WebappOptions.ViewMode
 			if mode == providerv1beta1.ViewMode_VIEW_MODE_READ_WRITE {
-				return conversions.NewEditorRole().CS3ResourcePermissions()
+				return permissions.NewEditorRole().CS3ResourcePermissions()
 			}
-			return conversions.NewViewerRole().CS3ResourcePermissions()
+			return permissions.NewViewerRole().CS3ResourcePermissions()
 		}
 	}
 	return nil
@@ -453,10 +454,8 @@ func (d *driver) Upload(ctx context.Context, ref *provider.Reference, content io
 
 func getDownloadProtocol(protocols []*gateway.FileDownloadProtocol, lst []string) (string, string, bool) {
 	for _, p := range protocols {
-		for _, prot := range lst {
-			if p.Protocol == prot {
-				return p.DownloadEndpoint, p.Token, true
-			}
+		if slices.Contains(lst, p.Protocol) {
+			return p.DownloadEndpoint, p.Token, true
 		}
 	}
 	return "", "", false

@@ -44,14 +44,14 @@ import (
 )
 
 type config struct {
-	NatsAddress      string                            `docs:";The NATS server address."                                  mapstructure:"nats_address"`
-	NatsToken        string                            `docs:";The token to authenticate against the NATS server"         mapstructure:"nats_token"`
-	NatsPrefix       string                            `docs:"reva-notifications;The notifications NATS stream."          mapstructure:"nats_prefix"`
-	HandlerConf      map[string]map[string]interface{} `docs:"nil;Settings for the different notification handlers."      mapstructure:"handlers"`
-	GroupingInterval int                               `docs:"60;Time in seconds to group incoming notification triggers" mapstructure:"grouping_interval"`
-	GroupingMaxSize  int                               `docs:"100;Maximum number of notifications to group"               mapstructure:"grouping_max_size"`
-	StorageDriver    string                            `docs:"mysql;The driver used to store notifications"               mapstructure:"storage_driver"`
-	StorageDrivers   map[string]map[string]interface{} `mapstructure:"storage_drivers"`
+	NatsAddress      string                    `docs:";The NATS server address."                                  mapstructure:"nats_address"`
+	NatsToken        string                    `docs:";The token to authenticate against the NATS server"         mapstructure:"nats_token"`
+	NatsPrefix       string                    `docs:"reva-notifications;The notifications NATS stream."          mapstructure:"nats_prefix"`
+	HandlerConf      map[string]map[string]any `docs:"nil;Settings for the different notification handlers."      mapstructure:"handlers"`
+	GroupingInterval int                       `docs:"60;Time in seconds to group incoming notification triggers" mapstructure:"grouping_interval"`
+	GroupingMaxSize  int                       `docs:"100;Maximum number of notifications to group"               mapstructure:"grouping_max_size"`
+	StorageDriver    string                    `docs:"mysql;The driver used to store notifications"               mapstructure:"storage_driver"`
+	StorageDrivers   map[string]map[string]any `mapstructure:"storage_drivers"`
 }
 
 func defaultConfig() *config {
@@ -88,7 +88,7 @@ func getNotificationManager(ctx context.Context, c *config) (notification.Manage
 }
 
 // New returns a new Notifications service.
-func New(ctx context.Context, m map[string]interface{}) (rserverless.Service, error) {
+func New(ctx context.Context, m map[string]any) (rserverless.Service, error) {
 	conf := defaultConfig()
 
 	if err := mapstructure.Decode(m, conf); err != nil {
@@ -240,7 +240,7 @@ func (s *svc) handleMsgTemplate(msg []byte) {
 }
 
 func (s *svc) handleMsgRegisterNotification(msg *nats.Msg) {
-	var data map[string]interface{}
+	var data map[string]any
 	err := json.Unmarshal(msg.Data, &data)
 	if err != nil {
 		s.log.Error().Err(err).Msg("notification registration unmarshall failed")
@@ -302,7 +302,7 @@ func (s *svc) getAccumulatorForTrigger(tr trigger.Trigger) *accumulator.Accumula
 }
 
 func (s *svc) handleMsgTrigger(msg *nats.Msg) {
-	var data map[string]interface{}
+	var data map[string]any
 	err := json.Unmarshal(msg.Data, &data)
 	if err != nil {
 		s.log.Error().Err(err).Msg("notification trigger unmarshall failed")
@@ -344,58 +344,57 @@ func (s *svc) handleMsgTrigger(msg *nats.Msg) {
 }
 
 func (s *svc) notificationSendCallback(ts []trigger.Trigger) {
-	const itemCount = 10
+	const maxItemCount = 10
 	var tr trigger.Trigger
 
-	if len(ts) == 1 {
-		tr = ts[0]
-		s.log.Info().Msgf("sending single notification for trigger %s", tr.Ref)
-	} else {
-		moreCount := len(ts) - itemCount
-		if moreCount < 0 {
-			moreCount = 0
-		}
+	moreCount := max(len(ts)-maxItemCount, 0)
 
-		// create a new trigger
-		tr = trigger.Trigger{
-			Ref:    ts[0].Ref,
-			Sender: ts[0].Sender,
-			TemplateData: map[string]interface{}{
-				"_count":     len(ts),
-				"_items":     []map[string]interface{}{},
-				"_moreCount": moreCount,
-			},
-		}
+	// create a new trigger
+	tr = trigger.Trigger{
+		Ref:          ts[0].Ref,
+		Sender:       ts[0].Sender,
+		Notification: ts[0].Notification,
+		TemplateData: map[string]any{
+			"_count":     len(ts),
+			"_items":     []map[string]any{},
+			"_moreCount": moreCount,
+		},
+	}
 
-		// add template data of the first ten elements, ignore the rest
-		l := itemCount
-		templateData := []map[string]interface{}{}
-		if l > len(ts) {
-			l = len(ts)
-		}
-		for _, t := range ts[:l] {
-			templateData = append(templateData, t.TemplateData)
-		}
-		tr.TemplateData["_items"] = templateData
+	// add template data of the first `maxItemCount` elements, ignore the rest
+	l := maxItemCount
+	templateData := []map[string]any{}
+	if l > len(ts) {
+		l = len(ts)
+	}
+	for _, t := range ts[:l] {
+		templateData = append(templateData, t.TemplateData)
+	}
+	tr.TemplateData["_items"] = templateData
 
-		// initialize the new trigger
-		notif, err := s.nm.GetNotification(tr.Ref)
+	// initialize the new trigger
+	var notif *notification.Notification
+	if tr.Notification == nil {
+		var err error
+		notif, err = s.nm.GetNotification(tr.Ref)
 		if err != nil {
 			s.log.Error().Msgf("notification retrieval from store failed")
 			return
 		}
-
-		templ, err := s.templates.Get(notif.TemplateName)
-		if err != nil {
-			s.log.Error().Err(err).Msgf("template %s for trigger %s not found", notif.TemplateName, tr.Ref)
-			return
-		}
-
-		notif.Template = *templ
-		tr.Notification = notif
-
-		s.log.Info().Msgf("sending multi notification for %d triggers %s", tr.TemplateData["_count"], tr.Ref)
+	} else {
+		notif = tr.Notification
 	}
+
+	templ, err := s.templates.Get(notif.TemplateName)
+	if err != nil {
+		s.log.Error().Err(err).Msgf("template %s for trigger %s not found", notif.TemplateName, tr.Ref)
+		return
+	}
+
+	notif.Template = *templ
+	tr.Notification = notif
+
+	s.log.Info().Msgf("sending notification for %d triggers %s", tr.TemplateData["_count"], tr.Ref)
 
 	// destroy old accumulator
 	s.accumulators[tr.Ref] = nil

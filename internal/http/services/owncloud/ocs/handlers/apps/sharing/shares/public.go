@@ -33,10 +33,11 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
+
 	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/response"
 	"github.com/cs3org/reva/v3/pkg/appctx"
 
-	"github.com/cs3org/reva/v3/pkg/notification"
 	"github.com/cs3org/reva/v3/pkg/publicshare"
 	"github.com/cs3org/reva/v3/pkg/rgrpc/todo/pool"
 	"github.com/pkg/errors"
@@ -107,11 +108,11 @@ func (h *Handler) createPublicLinkShare(w http.ResponseWriter, r *http.Request, 
 
 	if statInfo != nil && statInfo.Type == provider.ResourceType_RESOURCE_TYPE_FILE {
 		// Single file shares should never have delete or create permissions
-		role := conversions.RoleFromResourcePermissions(newPermissions)
-		permissions := role.OCSPermissions()
-		permissions &^= conversions.PermissionCreate
-		permissions &^= conversions.PermissionDelete
-		newPermissions = conversions.RoleFromOCSPermissions(permissions).CS3ResourcePermissions()
+		role := permissions.RoleFromResourcePermissions(newPermissions)
+		perms := role.OCSPermissions()
+		perms &^= permissions.PermissionCreate
+		perms &^= permissions.PermissionDelete
+		newPermissions = permissions.RoleFromOCSPermissions(perms).CS3ResourcePermissions()
 	}
 
 	internal, _ := strconv.ParseBool(r.FormValue("internal"))
@@ -221,7 +222,7 @@ func (h *Handler) listPublicShares(r *http.Request, filters []*link.ListPublicSh
 	input := make(chan *link.PublicShare, len(res.Share))
 	output := make(chan *conversions.ShareData, len(res.Share))
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Add(1)
 		go func(ctx context.Context, client gateway.GatewayAPIClient, input chan *link.PublicShare, output chan *conversions.ShareData, wg *sync.WaitGroup) {
 			defer wg.Done()
@@ -407,7 +408,6 @@ func (h *Handler) updatePublicShare(w http.ResponseWriter, r *http.Request, shar
 				})
 			}
 
-			h.notificationHelper.UnregisterNotification(shareID)
 		}
 	}
 
@@ -479,59 +479,29 @@ func (h *Handler) updatePublicShare(w http.ResponseWriter, r *http.Request, shar
 	// NotifyUploads
 	newNotifyUploads, ok := r.Form["notifyUploads"]
 
-	if ok {
-		ok2 := permissionsStayUploader(before, newPermissions)
-		u, ok3 := appctx.ContextGetUser(r.Context())
+	if ok && permissionsStayUploader(before, newPermissions) {
+		notifyUploads, _ := strconv.ParseBool(newNotifyUploads[0])
+		updatesFound = true
 
-		if ok2 && ok3 {
-			notifyUploads, _ := strconv.ParseBool(newNotifyUploads[0])
-			updatesFound = true
-
-			logger.Info().Str("shares", "update").Msgf("notify uploads updated to '%v'", notifyUploads)
-			updates = append(updates, &link.UpdatePublicShareRequest_Update{
-				Type:          link.UpdatePublicShareRequest_Update_TYPE_NOTIFYUPLOADS,
-				NotifyUploads: notifyUploads,
-			})
-
-			if notifyUploads {
-				n := &notification.Notification{
-					TemplateName: "sharedfolder-upload-mail",
-					Ref:          shareID,
-					Recipients:   []string{u.Mail},
-				}
-				h.notificationHelper.RegisterNotification(n)
-			} else {
-				h.notificationHelper.UnregisterNotification(shareID)
-			}
-		}
+		logger.Info().Str("shares", "update").Msgf("notify uploads updated to '%v'", notifyUploads)
+		updates = append(updates, &link.UpdatePublicShareRequest_Update{
+			Type:          link.UpdatePublicShareRequest_Update_TYPE_NOTIFYUPLOADS,
+			NotifyUploads: notifyUploads,
+		})
 	}
 
 	// NotifyUploadsExtraRecipients
 	newNotifyUploadsExtraRecipients, ok := r.Form["notifyUploadsExtraRecipients"]
 
-	if ok {
-		ok2 := permissionsStayUploader(before, newPermissions)
-		u, ok3 := appctx.ContextGetUser(r.Context())
+	if ok && permissionsStayUploader(before, newPermissions){
+		notifyUploadsExtraRecipients := newNotifyUploadsExtraRecipients[0]
+		updatesFound = true
+		logger.Info().Str("shares", "update").Msgf("notify uploads extra recipients updated to '%v'", notifyUploadsExtraRecipients)
 
-		if ok2 && ok3 {
-			notifyUploadsExtraRecipients := newNotifyUploadsExtraRecipients[0]
-			updatesFound = true
-			logger.Info().Str("shares", "update").Msgf("notify uploads extra recipients updated to '%v'", notifyUploadsExtraRecipients)
-
-			updates = append(updates, &link.UpdatePublicShareRequest_Update{
-				Type:                         link.UpdatePublicShareRequest_Update_TYPE_NOTIFYUPLOADSEXTRARECIPIENTS,
-				NotifyUploadsExtraRecipients: notifyUploadsExtraRecipients,
-			})
-
-			if len(notifyUploadsExtraRecipients) > 0 {
-				n := &notification.Notification{
-					TemplateName: "sharedfolder-upload-mail",
-					Ref:          shareID,
-					Recipients:   []string{u.Mail, notifyUploadsExtraRecipients},
-				}
-				h.notificationHelper.RegisterNotification(n)
-			}
-		}
+		updates = append(updates, &link.UpdatePublicShareRequest_Update{
+			Type:                         link.UpdatePublicShareRequest_Update_TYPE_NOTIFYUPLOADSEXTRARECIPIENTS,
+			NotifyUploadsExtraRecipients: notifyUploadsExtraRecipients,
+		})
 	}
 
 	publicShare := before.Share
@@ -616,13 +586,11 @@ func (h *Handler) removePublicShare(w http.ResponseWriter, r *http.Request, shar
 		return
 	}
 
-	h.notificationHelper.UnregisterNotification(shareID)
-
 	response.WriteOCSSuccess(w, r, nil)
 }
 
 func ocPublicPermToCs3(permKey int, h *Handler) (*provider.ResourcePermissions, error) {
-	// TODO refactor this ocPublicPermToRole[permKey] check into a conversions.NewPublicSharePermissions?
+	// TODO refactor this ocPublicPermToRole[permKey] check into a permissions.NewPublicSharePermissions?
 	// not all permissions are possible for public shares
 	_, ok := ocPublicPermToRole[permKey]
 	if !ok {
@@ -630,12 +598,12 @@ func ocPublicPermToCs3(permKey int, h *Handler) (*provider.ResourcePermissions, 
 		return nil, fmt.Errorf("invalid public share permission: %d", permKey)
 	}
 
-	perm, err := conversions.NewPermissions(permKey)
+	perm, err := permissions.NewPermissions(permKey)
 	if err != nil {
 		return nil, err
 	}
 
-	return conversions.RoleFromOCSPermissions(perm).CS3ResourcePermissions(), nil
+	return permissions.RoleFromOCSPermissions(perm).CS3ResourcePermissions(), nil
 }
 
 func permissionFromRequest(r *http.Request, h *Handler) (*provider.ResourcePermissions, error) {
@@ -681,26 +649,26 @@ func permissionFromRequest(r *http.Request, h *Handler) (*provider.ResourcePermi
 	return p, err
 }
 
-func isPermissionUploader(permissions *provider.ResourcePermissions) bool {
-	if permissions == nil {
+func isPermissionUploader(perms *provider.ResourcePermissions) bool {
+	if perms == nil {
 		return false
 	}
 
 	publicSharePermissions := &link.PublicSharePermissions{
-		Permissions: permissions,
+		Permissions: perms,
 	}
-	return conversions.RoleFromResourcePermissions(publicSharePermissions.Permissions).Name == conversions.RoleUploader
+	return permissions.RoleFromResourcePermissions(publicSharePermissions.Permissions).Name == permissions.RoleUploader
 }
 
-func isPermissionEditor(permissions *provider.ResourcePermissions) bool {
-	if permissions == nil {
+func isPermissionEditor(perms *provider.ResourcePermissions) bool {
+	if perms == nil {
 		return false
 	}
 
 	publicSharePermissions := &link.PublicSharePermissions{
-		Permissions: permissions,
+		Permissions: perms,
 	}
-	return conversions.RoleFromResourcePermissions(publicSharePermissions.Permissions).Name == conversions.RoleEditor
+	return permissions.RoleFromResourcePermissions(publicSharePermissions.Permissions).Name == permissions.RoleEditor
 }
 
 func permissionsStayUploader(before *link.GetPublicShareResponse, newPermissions *provider.ResourcePermissions) bool {

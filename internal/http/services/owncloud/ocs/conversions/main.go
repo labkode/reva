@@ -39,6 +39,8 @@ import (
 	publicsharemgr "github.com/cs3org/reva/v3/pkg/publicshare/manager/registry"
 	"github.com/cs3org/reva/v3/pkg/user"
 	usermgr "github.com/cs3org/reva/v3/pkg/user/manager/registry"
+	"github.com/cs3org/reva/v3/pkg/permissions"
+
 )
 
 const (
@@ -94,7 +96,7 @@ type ShareData struct {
 	AdditionalInfoOwner string `json:"additional_info_owner" xml:"additional_info_owner"`
 	// The permission attribute set on the file.
 	// TODO(jfd) change the default to read only
-	Permissions Permissions `json:"permissions" xml:"permissions"`
+	Permissions permissions.OcsPermissions `json:"permissions" xml:"permissions"`
 	// The UNIX timestamp when the share was created.
 	STime uint64 `json:"stime" xml:"stime"`
 	// ?
@@ -205,7 +207,7 @@ func CS3Share2ShareData(ctx context.Context, share *collaboration.Share) (*Share
 		sd.ID = share.Id.OpaqueId
 	}
 	if share.GetPermissions() != nil && share.GetPermissions().GetPermissions() != nil {
-		sd.Permissions = RoleFromResourcePermissions(share.GetPermissions().GetPermissions()).OCSPermissions()
+		sd.Permissions = permissions.RoleFromResourcePermissions(share.GetPermissions().GetPermissions()).OCSPermissions()
 	}
 	if share.Ctime != nil {
 		sd.STime = share.Ctime.Seconds // TODO CS3 api birth time = btime
@@ -234,7 +236,7 @@ func PublicShare2ShareData(share *link.PublicShare, r *http.Request, publicURL s
 		sd.ID = share.Id.OpaqueId
 	}
 	if share.GetPermissions() != nil && share.GetPermissions().GetPermissions() != nil {
-		sd.Permissions = RoleFromResourcePermissions(share.GetPermissions().GetPermissions()).OCSPermissions()
+		sd.Permissions = permissions.RoleFromResourcePermissions(share.GetPermissions().GetPermissions()).OCSPermissions()
 	}
 	if share.Expiration != nil {
 		sd.Expiration = timestampToExpiration(share.Expiration)
@@ -253,7 +255,10 @@ func PublicShare2ShareData(share *link.PublicShare, r *http.Request, publicURL s
 }
 
 func formatRemoteUser(u *userpb.UserId) string {
-	return fmt.Sprintf("%s@%s", u.OpaqueId, u.Idp)
+	if u != nil {
+		return fmt.Sprintf("%s@%s", u.OpaqueId, u.Idp)
+	}
+	return "Federated User"
 }
 
 func webdavInfo(protocols []*ocm.Protocol) (*ocm.WebDAVProtocol, bool) {
@@ -277,7 +282,7 @@ func ReceivedOCMShare2ShareData(share *ocm.ReceivedShare, path string) (*ShareDa
 		UIDOwner:     formatRemoteUser(share.Creator),
 		UIDFileOwner: formatRemoteUser(share.Owner),
 		ShareWith:    share.Grantee.GetUserId().OpaqueId,
-		Permissions:  RoleFromResourcePermissions(webdav.Permissions.Permissions).OCSPermissions(),
+		Permissions:  permissions.RoleFromResourcePermissions(webdav.Permissions.Permissions).OCSPermissions(),
 		ShareType:    ShareTypeFederatedCloudShare,
 		Path:         path,
 		FileTarget:   path,
@@ -315,7 +320,7 @@ func OCMShare2ShareData(share *ocm.Share) (*ShareData, error) {
 		UIDOwner:     share.Creator.OpaqueId,
 		UIDFileOwner: share.Owner.OpaqueId,
 		ShareWith:    formatRemoteUser(share.Grantee.GetUserId()),
-		Permissions:  RoleFromResourcePermissions(webdav.Permissions).OCSPermissions(),
+		Permissions:  permissions.RoleFromResourcePermissions(webdav.Permissions).OCSPermissions(),
 		ShareType:    ShareTypeFederatedCloudShare,
 		STime:        share.Ctime.Seconds,
 		Name:         share.Name,
@@ -346,7 +351,7 @@ func LocalGroupIDToString(groupID *grouppb.GroupId) string {
 }
 
 // GetUserManager returns a connection to a user share manager.
-func GetUserManager(ctx context.Context, manager string, m map[string]map[string]interface{}) (user.Manager, error) {
+func GetUserManager(ctx context.Context, manager string, m map[string]map[string]any) (user.Manager, error) {
 	if f, ok := usermgr.NewFuncs[manager]; ok {
 		return f(ctx, m[manager])
 	}
@@ -355,7 +360,7 @@ func GetUserManager(ctx context.Context, manager string, m map[string]map[string
 }
 
 // GetPublicShareManager returns a connection to a public share manager.
-func GetPublicShareManager(ctx context.Context, manager string, m map[string]map[string]interface{}) (publicshare.Manager, error) {
+func GetPublicShareManager(ctx context.Context, manager string, m map[string]map[string]any) (publicshare.Manager, error) {
 	if f, ok := publicsharemgr.NewFuncs[manager]; ok {
 		return f(ctx, m[manager])
 	}

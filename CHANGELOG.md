@@ -1,3 +1,434 @@
+Changelog for reva 3.5.0 (2026-01-09)
+=======================================
+
+The following sections list the changes in reva 3.5.0 relevant to
+reva users. The changes are ordered by importance.
+
+Summary
+-------
+
+ * Fix #5449: Fix database sharedconfig parsing
+ * Fix #5464: Make MOVE work in public link
+ * Fix #5446: Make notify_uploads_extra_recipients work in libregraph
+ * Fix #5463: Fix permission editing for public links
+ * Fix #5404: Fix localhome virtual namespace path handling for spaces
+ * Enh #5429: Cephmount: supports setting posix acls
+ * Enh #5433: Make chunking_parallel_upload_disabled configurable
+ * Enh #5450: Clean up ListWithRegex log
+ * Enh #5447: Make notification trigger always use `items`
+ * Enh #5445: Support funcs in templates
+ * Enh #5402: Refactoring of the GORM model for shares
+ * Enh #5428: Refactor permissions
+
+Details
+-------
+
+ * Bugfix #5449: Fix database sharedconfig parsing
+
+   https://github.com/cs3org/reva/pull/5449
+
+ * Bugfix #5464: Make MOVE work in public link
+
+   https://github.com/cs3org/reva/pull/5464
+
+ * Bugfix #5446: Make notify_uploads_extra_recipients work in libregraph
+
+   https://github.com/cs3org/reva/pull/5446
+
+ * Bugfix #5463: Fix permission editing for public links
+
+   A bug was introduced during the refactoring of the permission system
+   (https://github.com/cs3org/reva/pull/5428). This has now been fixed.
+
+   https://github.com/cs3org/reva/pull/5463
+
+ * Bugfix #5404: Fix localhome virtual namespace path handling for spaces
+
+   Added optional VirtualHomeTemplate config to localfs driver, enabling localhome to
+   correctly handle paths when exposing user homes through a virtual namespace (e.g.,
+   /home/<user>) while storing files in a flat per-user layout on disk.
+
+   The wrap() function uses a clean switch statement with named predicates to handle five path
+   transformation patterns:
+
+   - Exact match: /home/einstein -> / - Full path: /home/einstein/file -> /file - Parent path:
+   /home -> / (when virtual home is /home/einstein) - Gateway-stripped parent: /home/file ->
+   /file (gateway omits username) - Gateway-stripped username: /einstein/file -> /file
+   (WebDAV "home" alias)
+
+   The last two cases handle gateway routing edge cases where prefixes are stripped differently
+   depending on whether the WebDAV layer uses space IDs or the "home" alias for URL construction.
+
+   The normalize() function adds the virtual home prefix only to the Path field of ResourceInfo
+   (e.g., /file -> /home/einstein/file), enabling PathToSpaceID() to derive the correct space
+   identifier. The OpaqueId field remains storage-relative (e.g., fileid-einstein%2Ffile)
+   to ensure resource IDs can be properly decoded.
+
+   The localhome wrapper now correctly passes VirtualHomeTemplate through to localfs.
+
+   When VirtualHomeTemplate is empty (default), behavior is unchanged, ensuring backward
+   compatibility with EOS and existing deployments.
+
+   https://github.com/cs3org/reva/pull/5404
+
+ * Enhancement #5429: Cephmount: supports setting posix acls
+
+   https://github.com/cs3org/reva/pull/5429
+
+ * Enhancement #5433: Make chunking_parallel_upload_disabled configurable
+
+   https://github.com/cs3org/reva/pull/5433
+
+ * Enhancement #5450: Clean up ListWithRegex log
+
+   https://github.com/cs3org/reva/pull/5450
+
+ * Enhancement #5447: Make notification trigger always use `items`
+
+   https://github.com/cs3org/reva/pull/5447
+
+ * Enhancement #5445: Support funcs in templates
+
+   https://github.com/cs3org/reva/pull/5445
+
+ * Enhancement #5402: Refactoring of the GORM model for shares
+
+   With this PR we introduce new constraints and rename some fields for better consistency:
+
+   * Types used by OCM structures only are prefixed with `Ocm`, and `AccessMethod` and `Protocol`
+   were consolidated into `OcmProtocol` * ItemType is used in OCM shares as well * The
+   `(FileIdPrefix, ItemSource)` tuple is now `(Instance, Inode)` in `OcmShare`, and it was
+   removed from `OcmReceivedShare` as unused * Unique index constraints have been created for
+   regular `Shares` and for `OcmShares` on `(instance, inode, shareWith, deletedAt)` * The
+   unique indexes have been renamed with a `u_` prefix for consistency: this affected
+   `u_shareid_user`, `u_link_token`. The `i_share_with` was dropped as redundant. * `Alias`
+   and `Hidden` were added in `OcmReceivedShare`
+
+   https://github.com/cs3org/reva/pull/5402
+
+ * Enhancement #5428: Refactor permissions
+
+   Permissions are now, at least partially, handled and exposed within a single package (which
+   was important for cernboxcop), with conversions between the different types of permissions
+
+   https://github.com/cs3org/reva/pull/5428
+
+
+Changelog for reva 3.4.2 (2025-12-17)
+=======================================
+
+The following sections list the changes in reva 3.4.2 relevant to
+reva users. The changes are ordered by importance.
+
+Summary
+-------
+
+ * Fix #5444: Allow lightweight accounts to use external apps
+ * Enh #5442: Refactor emailhandler
+
+Details
+-------
+
+ * Bugfix #5444: Allow lightweight accounts to use external apps
+
+   For that, we need to explicitly allow all relevant storage provider requests when checking the
+   lw scope.
+
+   https://github.com/cs3org/reva/pull/5444
+
+ * Enhancement #5442: Refactor emailhandler
+
+   The email handler now supports reading CID files and embedding them.
+
+   https://github.com/cs3org/reva/pull/5442
+
+
+Changelog for reva 3.4.1 (2025-12-16)
+=======================================
+
+The following sections list the changes in reva 3.4.1 relevant to
+reva users. The changes are ordered by importance.
+
+Summary
+-------
+
+ * Fix #5443: Make PROPFIND on files proper
+
+Details
+-------
+
+ * Bugfix #5443: Make PROPFIND on files proper
+
+   https://github.com/cs3org/reva/pull/5443
+
+
+Changelog for reva 3.4.0 (2025-12-12)
+=======================================
+
+The following sections list the changes in reva 3.4.0 relevant to
+reva users. The changes are ordered by importance.
+
+Summary
+-------
+
+ * Fix #5425: Make public file PROPFIND response proper again
+ * Fix #5421: Eosfs: SetLock now checks existing locks
+ * Fix #5424: Make href properly formed on PROPFIND requests to /v endpoints
+ * Fix #5418: Fix inverted expiry check in JSON invite repository
+ * Fix #5412: Nilpointer in logline when addGrant fails
+ * Fix #5415: Set correct user type when accepting OCM invites
+ * Fix #5422: Do not give delete permission to root of public links
+ * Fix #5409: Bring back proper DAV support
+ * Fix #5430: Fix trashbin restores
+ * Fix #5427: Fix upload notifications
+ * Fix #5423: Make href proper in REPORT
+ * Enh #5385: Add OCM Where Are You From capability
+ * Enh #5403: Add Acess-Control-Expose-Headers for Range requests
+ * Enh #5323: Add database config to sharedconf
+ * Enh #5432: Add support for embedded view mode in apps
+ * Enh #5408: Modernize codebase
+ * Enh #5407: Add musl-based fully static build target
+ * Enh #5401: Adapt gateway and corresponding driver to CS3API changes
+ * Enh #5363: Include OCM shares in SharedByMe view
+ * Enh #5285: Remove EOS EnableHome parameter
+ * Enh #5405: Add support for signed URLs
+ * Enh #5381: Convert SQL tables to gorm, corresponding driver, and tests
+
+Details
+-------
+
+ * Bugfix #5425: Make public file PROPFIND response proper again
+
+   https://github.com/cs3org/reva/pull/5425
+
+ * Bugfix #5421: Eosfs: SetLock now checks existing locks
+
+   https://github.com/cs3org/reva/pull/5421
+
+ * Bugfix #5424: Make href properly formed on PROPFIND requests to /v endpoints
+
+   https://github.com/cs3org/reva/pull/5424
+
+ * Bugfix #5418: Fix inverted expiry check in JSON invite repository
+
+   The `tokenIsExpired` function in the JSON invite repository had the comparison operator
+   inverted, causing valid (non-expired) tokens to be incorrectly filtered out when listing
+   invite tokens.
+
+   The check `token.Expiration.Seconds > Now()` was returning true for tokens expiring in the
+   future, effectively hiding all valid tokens. Fixed to use `<` instead of `>`.
+
+   https://github.com/cs3org/reva/pull/5418
+
+ * Bugfix #5412: Nilpointer in logline when addGrant fails
+
+   Fix for https://github.com/cs3org/reva/issues/5387
+
+   https://github.com/cs3org/reva/pull/5412
+
+ * Bugfix #5415: Set correct user type when accepting OCM invites
+
+   When a remote user accepts an OCM invite, they were being stored with USER_TYPE_PRIMARY
+   instead of USER_TYPE_FEDERATED. This caused federated user searches to fail and OCM share
+   creation to break because the user ID was not properly formatted with the @domain suffix
+   required for OCM address resolution.
+
+   https://github.com/cs3org/reva/pull/5415
+
+ * Bugfix #5422: Do not give delete permission to root of public links
+
+   Otherwise, a folder shared through a public link could itself be deleted
+
+   https://github.com/cs3org/reva/pull/5422
+
+ * Bugfix #5409: Bring back proper DAV support
+
+   Spaces broke proper DAV support, because returned hrefs in the PROPFIND always contained
+   space IDs, even if these were not present in the incoming request. This is fixed now, by writing
+   the href based in the incoming URL
+
+   https://github.com/cs3org/reva/pull/5409
+
+ * Bugfix #5430: Fix trashbin restores
+
+   https://github.com/cs3org/reva/pull/5430
+
+ * Bugfix #5427: Fix upload notifications
+
+   The registration of notifications for uploads in a public link folder was until now only
+   handled in the OCS HTTP layer; this is the responsibility of the public share provider. Since it
+   was also missing from the OCGraph layer, this has been moved to the "gRPC" part of reva
+
+   https://github.com/cs3org/reva/pull/5427
+
+ * Bugfix #5423: Make href proper in REPORT
+
+   Github.com/cs3org/reva/pull/5409 broke REPORT calls, which are used for favorites. This is
+   now fixed
+
+   https://github.com/cs3org/reva/pull/5423
+
+ * Enhancement #5385: Add OCM Where Are You From capability
+
+   Implements WAYF specific discovery endpoints for the ScienceMesh package, enabling dynamic
+   OCM provider discovery and federation management.
+
+   https://github.com/cs3org/reva/pull/5385
+
+ * Enhancement #5403: Add Acess-Control-Expose-Headers for Range requests
+
+   We add the necessary headers for multipart range requests to Acess-Control-Expose-Headers
+   to expose these, so that clients can read them
+
+   https://github.com/cs3org/reva/pull/5403
+
+ * Enhancement #5323: Add database config to sharedconf
+
+   Add database configuration to `sharedconf`, so that it doesn't have to be repeated for every
+   driver
+
+   https://github.com/cs3org/reva/pull/5323
+
+ * Enhancement #5432: Add support for embedded view mode in apps
+
+   https://github.com/cs3org/reva/pull/5432
+
+ * Enhancement #5408: Modernize codebase
+
+   This PR
+   [modernize](https://pkg.go.dev/golang.org/x/tools/gopls/internal/analysis/modernize)s
+   the codebase: it removes syntax that used to be idiomatic but now has better alternatives
+
+   https://github.com/cs3org/reva/pull/5408
+
+ * Enhancement #5407: Add musl-based fully static build target
+
+   Added a new `revad-static-musl` Makefile target that produces a fully statically linked
+   binary using musl libc instead of glibc. This eliminates the linker warnings that appeared
+   with the standard static build and creates a truly portable binary that runs on any Linux
+   distribution without requiring matching glibc versions.
+
+   Also fixed the build info injection by correcting the package path in BUILD_FLAGS to include
+   the `/v3` module version, ensuring version, commit, and build date information are properly
+   displayed in the binary.
+
+   https://github.com/cs3org/reva/pull/5407
+
+ * Enhancement #5401: Adapt gateway and corresponding driver to CS3API changes
+
+   The OCM Core API has been renamed to OCM Incoming API
+
+   https://github.com/cs3org/reva/pull/5401
+
+ * Enhancement #5363: Include OCM shares in SharedByMe view
+
+   - The CS3APis verison has been updated to include "ListExistingOcmShares". - The OCM shares
+   are now included in the getSharedByMe call. - The filters have been updated to adapt to changes
+   from the updated CS3APIs. - Fixed bug where only ocm users were queried if it was enabled. -
+   Consolidated OCM Address resolutions in a single function, fixes #5383
+
+   https://github.com/cs3org/reva/pull/5363
+
+ * Enhancement #5285: Remove EOS EnableHome parameter
+
+   This change removes the `EnableHome` parameter, which was a source of bugs and was unused in
+   production.
+
+   https://github.com/cs3org/reva/pull/5285
+
+ * Enhancement #5405: Add support for signed URLs
+
+   https://github.com/cs3org/reva/pull/5405
+
+ * Enhancement #5381: Convert SQL tables to gorm, corresponding driver, and tests
+
+   - Conversion of the SQL tables to a GORM model, IDs are unique across public links, normal
+   shares, and OCM shares. - Some refactoring of the OCM tables (protocols and access methods) -
+   Corresponding SQL driver for access has been implemented using GORM - Tests with basic
+   coverage have been implemented.
+
+   https://github.com/cs3org/reva/pull/5381
+
+
+Changelog for reva 3.3.3 (2025-11-07)
+=======================================
+
+The following sections list the changes in reva 3.3.3 relevant to
+reva users. The changes are ordered by importance.
+
+Summary
+-------
+
+ * Fix #5393: Correct content-length when downloading versions
+ * Fix #5380: Nilpointer in getPermissionsByCs3Reference
+ * Fix #5388: Error code not checked correctly in eosclient
+ * Fix #5392: Fixed permissions for upload-only links
+ * Enh #5394: Fixed some logging going to stderr
+
+Details
+-------
+
+ * Bugfix #5393: Correct content-length when downloading versions
+
+   This fix corrects a bug introduced with the implementation of range requests, in
+   https://github.com/cs3org/reva/pull/5367, where the content-length header was not
+   populated correctly when downloading versions of a file, resulting in 0b.
+
+   https://github.com/cs3org/reva/pull/5393
+
+ * Bugfix #5380: Nilpointer in getPermissionsByCs3Reference
+
+   Fix for potential nilpointer: when an err is returned, the status can be nil
+
+   https://github.com/cs3org/reva/pull/5380
+
+ * Bugfix #5388: Error code not checked correctly in eosclient
+
+   Eosclient was returning an error when it actually succeeded
+
+   https://github.com/cs3org/reva/pull/5388
+
+ * Bugfix #5392: Fixed permissions for upload-only links
+
+   Pending a proper refactoring of the permissions model, this PR fixes the bug unveiled after
+   merging #5364. Cf. also Jira CERNBOX-4127.
+
+   https://github.com/cs3org/reva/pull/5392
+
+ * Enhancement #5394: Fixed some logging going to stderr
+
+   https://github.com/cs3org/reva/pull/5394
+
+
+Changelog for reva 3.3.1 (2025-10-21)
+=======================================
+
+The following sections list the changes in reva 3.3.1 relevant to
+reva users. The changes are ordered by importance.
+
+Summary
+-------
+
+ * Fix #5376: Deny access shares should not be returned in SharedWithMe call
+ * Fix #5375: Fix parsing of OCM Address in case of more than one "@" present
+
+Details
+-------
+
+ * Bugfix #5376: Deny access shares should not be returned in SharedWithMe call
+
+   - SharedWithMe no longer returns deny access shares
+
+   https://github.com/cs3org/reva/pull/5376
+
+ * Bugfix #5375: Fix parsing of OCM Address in case of more than one "@" present
+
+   I've fixed the behavior for parsing a long-standing annoyance for users who had OCM Address
+   like "mahdi-baghbani@it-department@azadehafzar.io".
+
+   https://github.com/cs3org/reva/pull/5375
+
+
 Changelog for reva 3.3.0 (2025-10-20)
 =======================================
 

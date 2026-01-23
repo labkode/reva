@@ -21,6 +21,7 @@ package userprovider
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
@@ -47,8 +48,8 @@ func init() {
 }
 
 type config struct {
-	Driver  string                            `mapstructure:"driver"`
-	Drivers map[string]map[string]interface{} `mapstructure:"drivers"`
+	Driver  string                    `mapstructure:"driver"`
+	Drivers map[string]map[string]any `mapstructure:"drivers"`
 }
 
 func (c *config) ApplyDefaults() {
@@ -66,7 +67,7 @@ func getDriver(ctx context.Context, c *config) (user.Manager, error) {
 }
 
 // New returns a new UserProviderServiceServer.
-func New(ctx context.Context, m map[string]interface{}) (rgrpc.Service, error) {
+func New(ctx context.Context, m map[string]any) (rgrpc.Service, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -140,9 +141,15 @@ func (s *service) GetUserByClaim(ctx context.Context, req *userpb.GetUserByClaim
 
 func (s *service) FindUsers(ctx context.Context, req *userpb.FindUsersRequest) (*userpb.FindUsersResponse, error) {
 	log := appctx.GetLogger(ctx)
-	users, err := s.usermgr.FindUsers(ctx, req.Query, req.Filter, req.SkipFetchingUserGroups)
+	idx := slices.IndexFunc(req.Filters, func(f *userpb.Filter) bool { return f != nil && f.Type == userpb.Filter_TYPE_QUERY })
+	if idx < 0 {
+		return nil, errtypes.BadRequest("Must pass a filter with Filter_TYPE_QUERY to FindUsers")
+	}
+	query := req.Filters[idx].GetQuery()
+
+	users, err := s.usermgr.FindUsers(ctx, query, req.Filters, req.SkipFetchingUserGroups)
 	if err != nil {
-		log.Error().Err(err).Str("query", req.Query).Msg("Failed to find users")
+		log.Error().Err(err).Str("query", query).Msg("Failed to find users")
 		err = errors.Wrap(err, "userprovidersvc: error finding users")
 		res := &userpb.FindUsersResponse{
 			Status: status.NewInternal(ctx, err, "error finding users"),

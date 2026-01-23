@@ -27,7 +27,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	textTemplate "text/template"
+	"time"
 
 	"github.com/cs3org/reva/v3/pkg/notification/handler"
 	"github.com/mitchellh/mapstructure"
@@ -65,7 +68,7 @@ func (t FileNotFoundError) Error() string {
 }
 
 // New creates a new Template from a RegistrationRequest.
-func New(m map[string]interface{}, hs map[string]handler.Handler) (*Template, string, error) {
+func New(m map[string]any, hs map[string]handler.Handler) (*Template, string, error) {
 	rr := &RegistrationRequest{}
 	if err := mapstructure.Decode(m, rr); err != nil {
 		return nil, rr.Name, err
@@ -101,14 +104,14 @@ func New(m map[string]interface{}, hs map[string]handler.Handler) (*Template, st
 }
 
 // RenderSubject renders the subject template.
-func (t *Template) RenderSubject(arguments map[string]interface{}) (string, error) {
+func (t *Template) RenderSubject(arguments map[string]any) (string, error) {
 	var buf bytes.Buffer
 	err := t.tmplSubject.Execute(&buf, arguments)
 	return buf.String(), err
 }
 
 // RenderBody renders the body template.
-func (t *Template) RenderBody(arguments map[string]interface{}) (string, error) {
+func (t *Template) RenderBody(arguments map[string]any) (string, error) {
 	var buf bytes.Buffer
 	err := t.tmplBody.Execute(&buf, arguments)
 	return buf.String(), err
@@ -129,9 +132,32 @@ func CheckTemplateName(name string) error {
 	return nil
 }
 
-func parseTmplFile(path, name string) (interface{}, error) {
+func parseTmplFile(path, name string) (any, error) {
 	if path == "" {
 		return textTemplate.New(name).Parse("")
+	}
+
+	// functions that can be used in templates
+	funcMap := map[string]any{
+		// String operations
+		"split":    strings.Split,
+		"join":     strings.Join,
+		"trim":     strings.TrimSpace,
+		"contains": strings.Contains,
+		"replace":  strings.Replace,
+
+		// Path operations
+		"base":  filepath.Base,
+		"dir":   filepath.Dir,
+		"clean": filepath.Clean,
+
+		// Conversion
+		"atoi":   strconv.Atoi,
+		"atoi64": strconv.ParseInt,
+		"ftoa":   strconv.FormatFloat,
+
+		// Date/time
+		"now": time.Now,
 	}
 
 	ext := filepath.Ext(path)
@@ -151,14 +177,14 @@ func parseTmplFile(path, name string) (interface{}, error) {
 
 	switch ext {
 	case ".txt":
-		tmpl, err := textTemplate.New(name).Parse(string(data))
+		tmpl, err := textTemplate.New(name).Funcs(funcMap).Parse(string(data))
 		if err != nil {
 			return nil, err
 		}
 
 		return tmpl, nil
 	case ".html":
-		tmpl, err := htmlTemplate.New(name).Parse(string(data))
+		tmpl, err := htmlTemplate.New(name).Funcs(funcMap).Parse(string(data))
 		if err != nil {
 			return nil, err
 		}

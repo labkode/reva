@@ -33,9 +33,10 @@ func init() {
 }
 
 type config struct {
-	Root        string `docs:"/var/tmp/reva/;Path of root directory for user storage." mapstructure:"root"`
-	ShareFolder string `docs:"/MyShares;Path for storing share references."            mapstructure:"share_folder"`
-	UserLayout  string `docs:"{{.Username}};Template for user home directories"        mapstructure:"user_layout"`
+	Root                string `docs:"/var/tmp/reva/;Path of root directory for user storage."                    mapstructure:"root"`
+	ShareFolder         string `docs:"/MyShares;Path for storing share references."                               mapstructure:"share_folder"`
+	UserLayout          string `docs:"{{.Username}};Template for user home directories"                           mapstructure:"user_layout"`
+	VirtualHomeTemplate string `docs:";Optional template for virtual home path (e.g., /home/{{.Username}})"      mapstructure:"virtual_home_template"`
 }
 
 func (c *config) ApplyDefaults() {
@@ -50,7 +51,7 @@ func (c *config) ApplyDefaults() {
 	}
 }
 
-func parseConfig(m map[string]interface{}) (*config, error) {
+func parseConfig(m map[string]any) (*config, error) {
 	c := &config{}
 	if err := mapstructure.Decode(m, c); err != nil {
 		err = errors.Wrap(err, "error decoding conf")
@@ -61,16 +62,17 @@ func parseConfig(m map[string]interface{}) (*config, error) {
 
 // New returns an implementation to of the storage.FS interface that talks to
 // a local filesystem with user homes.
-func New(ctx context.Context, m map[string]interface{}) (storage.FS, error) {
+func New(ctx context.Context, m map[string]any) (storage.FS, error) {
 	c, err := parseConfig(m)
 	if err != nil {
 		return nil, err
 	}
 
 	conf := localfs.Config{
-		Root:        c.Root,
-		ShareFolder: c.ShareFolder,
-		UserLayout:  c.UserLayout,
+		Root:                c.Root,
+		ShareFolder:         c.ShareFolder,
+		UserLayout:          c.UserLayout,
+		VirtualHomeTemplate: c.VirtualHomeTemplate,
 	}
 	return localfs.NewLocalFS(&conf)
 }

@@ -86,7 +86,14 @@ func (s *svc) listGroups(w http.ResponseWriter, r *http.Request) {
 
 	groups, err := gw.FindGroups(ctx, &groupv1beta1.FindGroupsRequest{
 		SkipFetchingMembers: true,
-		Filter:              queryVal,
+		Filters: []*groupv1beta1.Filter{
+			&groupv1beta1.Filter{
+				Type: groupv1beta1.Filter_TYPE_QUERY,
+				Term: &groupv1beta1.Filter_Query{
+					Query: queryVal,
+				},
+			},
+		},
 	})
 	if err != nil {
 		handleError(ctx, err, w)
@@ -136,8 +143,8 @@ func getGroupSelectionFromRequest(selQuery *godata.GoDataSelectQuery) []GroupSel
 		return nil
 	}
 	selection := []GroupSelectableProperty{}
-	items := strings.Split(selQuery.RawValue, ",")
-	for _, item := range items {
+	items := strings.SplitSeq(selQuery.RawValue, ",")
+	for item := range items {
 		prop := GroupSelectableProperty(item)
 		if prop.Valid() {
 			selection = append(selection, prop)

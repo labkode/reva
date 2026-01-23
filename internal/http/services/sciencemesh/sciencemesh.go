@@ -36,7 +36,7 @@ func init() {
 
 // New returns a new sciencemesh service, which serves as the backend for the ScienceMesh web app
 // to handle OCM related requests for local users.
-func New(ctx context.Context, m map[string]interface{}) (global.Service, error) {
+func New(ctx context.Context, m map[string]any) (global.Service, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -61,14 +61,17 @@ func (s *svc) Close() error {
 }
 
 type config struct {
-	Prefix           string                      `mapstructure:"prefix"`
-	SMTPCredentials  *smtpclient.SMTPCredentials `mapstructure:"smtp_credentials"`
-	GatewaySvc       string                      `mapstructure:"gatewaysvc"         validate:"required"`
-	MeshDirectoryURL string                      `mapstructure:"mesh_directory_url" validate:"required"`
-	ProviderDomain   string                      `mapstructure:"provider_domain"    validate:"required"`
-	SubjectTemplate  string                      `mapstructure:"subject_template"`
-	BodyTemplatePath string                      `mapstructure:"body_template_path"`
-	OCMMountPoint    string                      `mapstructure:"ocm_mount_point"`
+	Prefix               string                      `mapstructure:"prefix"`
+	SMTPCredentials      *smtpclient.SMTPCredentials `mapstructure:"smtp_credentials"`
+	GatewaySvc           string                      `mapstructure:"gatewaysvc"         validate:"required"`
+	MeshDirectoryURL     string                      `mapstructure:"mesh_directory_url" validate:"required"`
+	ProviderDomain       string                      `mapstructure:"provider_domain"    validate:"required"`
+	SubjectTemplate      string                      `mapstructure:"subject_template"`
+	BodyTemplatePath     string                      `mapstructure:"body_template_path"`
+	OCMMountPoint        string                      `mapstructure:"ocm_mount_point"`
+	DirectoryServiceURLs string                      `mapstructure:"directory_service_urls"`
+	OCMClientTimeout     int                         `mapstructure:"ocm_client_timeout"`
+	OCMClientInsecure    bool                        `mapstructure:"ocm_client_insecure"`
 }
 
 func (c *config) ApplyDefaults() {
@@ -77,6 +80,9 @@ func (c *config) ApplyDefaults() {
 	}
 	if c.OCMMountPoint == "" {
 		c.OCMMountPoint = "/ocm"
+	}
+	if c.OCMClientTimeout == 0 {
+		c.OCMClientTimeout = 10
 	}
 
 	c.GatewaySvc = sharedconf.GetGatewaySVC(c.GatewaySvc)
@@ -102,6 +108,15 @@ func (s *svc) routerInit() error {
 		return err
 	}
 
+	wayfHandler := new(wayfHandler)
+	if err := wayfHandler.init(s.conf); err != nil {
+		return err
+	}
+	embeddedHandler := new(embeddedHandler)
+	if err := embeddedHandler.init(s.conf); err != nil {
+		return err
+	}
+
 	s.router.Post("/generate-invite", tokenHandler.Generate)
 	s.router.Get("/list-invite", tokenHandler.ListInvite)
 	s.router.Post("/accept-invite", tokenHandler.AcceptInvite)
@@ -109,6 +124,9 @@ func (s *svc) routerInit() error {
 	s.router.Delete("/delete-accepted-user", tokenHandler.DeleteAccepted)
 	s.router.Get("/list-providers", providersHandler.ListProviders)
 	s.router.Post("/open-in-app", appsHandler.OpenInApp)
+	s.router.Get("/federations", wayfHandler.GetFederations)
+	s.router.Post("/discover", wayfHandler.DiscoverProvider)
+	s.router.Get("/embedded-shares", embeddedHandler.ListEmbeddedShares)
 	return nil
 }
 
@@ -117,7 +135,7 @@ func (s *svc) Prefix() string {
 }
 
 func (s *svc) Unprotected() []string {
-	return nil
+	return []string{"/federations", "/discover"}
 }
 
 func (s *svc) Handler() http.Handler {

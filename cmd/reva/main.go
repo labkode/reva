@@ -34,6 +34,7 @@ import (
 var (
 	conf                                                        *config
 	host                                                        string
+	tokenFile                                                   string
 	insecure, skipverify, disableargprompt, insecuredatagateway bool
 	timeout                                                     int64
 
@@ -56,6 +57,7 @@ var (
 		rmCommand(),
 		moveCommand(),
 		mkdirCommand(),
+		touchCommand(),
 		ocmFindAcceptedUsersCommand(),
 		ocmRemoveAcceptedUser(),
 		ocmInviteGenerateCommand(),
@@ -115,6 +117,7 @@ func init() {
 	)
 	flag.BoolVar(&disableargprompt, "disable-arg-prompt", false, "whether to disable prompts for command arguments")
 	flag.Int64Var(&timeout, "timeout", -1, "the timeout in seconds for executing the commands, -1 means no timeout")
+	flag.StringVar(&tokenFile, "token-file", "", "path to the token file")
 	flag.Parse()
 }
 

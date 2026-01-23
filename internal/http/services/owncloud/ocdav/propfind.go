@@ -40,18 +40,18 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/cs3org/reva/v3/internal/grpc/services/storageprovider"
-	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
 	"github.com/cs3org/reva/v3/pkg/appctx"
 	"github.com/cs3org/reva/v3/pkg/spaces"
+	"github.com/cs3org/reva/v3/pkg/permissions"
+
 	"github.com/pkg/errors"
+	
 
 	"github.com/cs3org/reva/v3/pkg/publicshare"
-	"github.com/cs3org/reva/v3/pkg/rhttp/router"
 	"github.com/cs3org/reva/v3/pkg/share"
 	"github.com/cs3org/reva/v3/pkg/utils"
 	"github.com/cs3org/reva/v3/pkg/utils/resourceid"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -92,15 +92,15 @@ func (s *svc) handlePathPropfind(w http.ResponseWriter, r *http.Request, ns stri
 		return
 	}
 
-	parentInfo, resourceInfos, ok := s.getResourceInfos(ctx, w, r, pf, ref, false, sublog)
+	parentInfo, resourceInfos, hrefBase, ok := s.getResourceInfos(ctx, w, r, pf, ref, sublog)
 	if !ok {
 		// getResourceInfos handles responses in case of an error so we can just return here.
 		return
 	}
-	s.propfindResponse(ctx, w, r, ns, pf, parentInfo, resourceInfos, sublog)
+	s.propfindResponse(ctx, w, r, ns, hrefBase, pf, parentInfo, resourceInfos, sublog)
 }
 
-func (s *svc) propfindResponse(ctx context.Context, w http.ResponseWriter, r *http.Request, namespace string, pf propfindXML, parentInfo *provider.ResourceInfo, resourceInfos []*provider.ResourceInfo, log zerolog.Logger) {
+func (s *svc) propfindResponse(ctx context.Context, w http.ResponseWriter, r *http.Request, namespace, hrefBase string, pf propfindXML, parentInfo *provider.ResourceInfo, resourceInfos []*provider.ResourceInfo, log zerolog.Logger) {
 	user, ok := appctx.ContextGetUser(ctx)
 	if !ok {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -169,7 +169,7 @@ func (s *svc) propfindResponse(ctx context.Context, w http.ResponseWriter, r *ht
 		log.Error().Err(err).Msg("propfindResponse: couldn't list user shares")
 	}
 
-	propRes, err := s.multistatusResponse(ctx, &pf, resourceInfos, namespace, usershares, linkshares)
+	propRes, err := s.multistatusResponse(ctx, &pf, resourceInfos, parentInfo, namespace, hrefBase, usershares, linkshares)
 	if err != nil {
 		log.Error().Err(err).Msg("error formatting propfind")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -197,7 +197,8 @@ func (s *svc) propfindResponse(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 }
 
-func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *http.Request, pf propfindXML, ref *provider.Reference, spacesPropfind bool, log zerolog.Logger) (*provider.ResourceInfo, []*provider.ResourceInfo, bool) {
+// returns parent, children, hrefBase, OK
+func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *http.Request, pf propfindXML, ref *provider.Reference, log zerolog.Logger) (*provider.ResourceInfo, []*provider.ResourceInfo, string, bool) {
 	depth := r.Header.Get(HeaderDepth)
 	if depth == "" {
 		depth = "1"
@@ -212,14 +213,14 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 			message: m,
 		}, "")
 		HandleWebdavError(&log, w, b, err)
-		return nil, nil, false
+		return nil, nil, "", false
 	}
 
 	client, err := s.getClient()
 	if err != nil {
 		log.Error().Err(err).Msg("error getting grpc client")
 		w.WriteHeader(http.StatusInternalServerError)
-		return nil, nil, false
+		return nil, nil, "", false
 	}
 
 	var metadataKeys []string
@@ -247,7 +248,7 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 	if err != nil {
 		log.Error().Err(err).Interface("req", req).Msg("error sending a stat request to the gateway")
 		w.WriteHeader(http.StatusInternalServerError)
-		return nil, nil, false
+		return nil, nil, "", false
 	} else if res.Status.Code != rpc.Code_CODE_OK {
 		if res.Status.Code == rpc.Code_CODE_NOT_FOUND {
 			w.WriteHeader(http.StatusNotFound)
@@ -257,25 +258,26 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 				message: m,
 			}, "")
 			HandleWebdavError(&log, w, b, err)
-			return nil, nil, false
+			return nil, nil, "", false
 		}
 		HandleErrorStatus(&log, w, res.Status)
-		return nil, nil, false
-	}
-
-	if spacesPropfind {
-		res.Info.Path = ref.Path
+		return nil, nil, "", false
 	}
 
 	parentInfo := res.Info
 	resourceInfos := []*provider.ResourceInfo{parentInfo}
 
+	hrefBase := r.URL.Path
+	if ctxPath := ctx.Value(ctxKeyIncomingURL); ctxPath != nil {
+		hrefBase = ctxPath.(string)
+	}
+
 	switch {
 	case depth == "0":
 		// https://www.ietf.org/rfc/rfc2518.txt:
 		// the method is to be applied only to the resource
-		return parentInfo, resourceInfos, true
-	case !spacesPropfind && parentInfo.Type != provider.ResourceType_RESOURCE_TYPE_CONTAINER:
+		return parentInfo, resourceInfos, hrefBase, true
+	case parentInfo.Type != provider.ResourceType_RESOURCE_TYPE_CONTAINER:
 		// The propfind is requested for a file that exists
 		// In this case, we can stat the parent directory and return both
 		parentPath := path.Dir(parentInfo.Path)
@@ -287,7 +289,7 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 		if err != nil {
 			log.Error().Err(err).Interface("req", req).Msg("error sending a grpc stat request")
 			w.WriteHeader(http.StatusInternalServerError)
-			return nil, nil, false
+			return nil, nil, "", false
 		} else if parentRes.Status.Code != rpc.Code_CODE_OK {
 			if parentRes.Status.Code == rpc.Code_CODE_NOT_FOUND {
 				w.WriteHeader(http.StatusNotFound)
@@ -297,12 +299,15 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 					message: m,
 				}, "")
 				HandleWebdavError(&log, w, b, err)
-				return nil, nil, false
+				return nil, nil, "", false
 			}
 			HandleErrorStatus(&log, w, parentRes.Status)
-			return nil, nil, false
+			return nil, nil, "", false
 		}
 		parentInfo = parentRes.Info
+		// The incoming URL was not to a folder, but to the file itself.
+		// So the href we constructed up to now is wrong: it needs to be refering to the parent
+		hrefBase = path.Dir(hrefBase)
 
 	case parentInfo.Type == provider.ResourceType_RESOURCE_TYPE_CONTAINER && depth == "1":
 		req := &provider.ListContainerRequest{
@@ -313,12 +318,12 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 		if err != nil {
 			log.Error().Err(err).Msg("error sending list container grpc request")
 			w.WriteHeader(http.StatusInternalServerError)
-			return nil, nil, false
+			return nil, nil, "", false
 		}
 
 		if res.Status.Code != rpc.Code_CODE_OK {
 			HandleErrorStatus(&log, w, res.Status)
-			return nil, nil, false
+			return nil, nil, "", false
 		}
 		resourceInfos = append(resourceInfos, res.Infos...)
 
@@ -330,28 +335,19 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 			// retrieve path on top of stack
 			path := stack[len(stack)-1]
 
-			var nRef *provider.Reference
-			if spacesPropfind {
-				nRef = &provider.Reference{
-					ResourceId: ref.ResourceId,
-					Path:       path,
-				}
-			} else {
-				nRef = &provider.Reference{Path: path}
-			}
 			req := &provider.ListContainerRequest{
-				Ref:                   nRef,
+				Ref:                   &provider.Reference{Path: path},
 				ArbitraryMetadataKeys: metadataKeys,
 			}
 			res, err := client.ListContainer(ctx, req)
 			if err != nil {
 				log.Error().Err(err).Str("path", path).Msg("error sending list container grpc request")
 				w.WriteHeader(http.StatusInternalServerError)
-				return nil, nil, false
+				return nil, nil, "", false
 			}
 			if res.Status.Code != rpc.Code_CODE_OK {
 				HandleErrorStatus(&log, w, res.Status)
-				return nil, nil, false
+				return nil, nil, "", false
 			}
 
 			stack = stack[:len(stack)-1]
@@ -359,9 +355,6 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 			// check sub-containers in reverse order and add them to the stack
 			// the reversed order here will produce a more logical sorting of results
 			for i := len(res.Infos) - 1; i >= 0; i-- {
-				if spacesPropfind {
-					res.Infos[i].Path = utils.MakeRelativePath(filepath.Join(nRef.Path, res.Infos[i].Path))
-				}
 				if res.Infos[i].Type == provider.ResourceType_RESOURCE_TYPE_CONTAINER {
 					stack = append(stack, res.Infos[i].Path)
 				}
@@ -377,7 +370,7 @@ func (s *svc) getResourceInfos(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 	}
 
-	return parentInfo, resourceInfos, true
+	return parentInfo, resourceInfos, hrefBase, true
 }
 
 func requiresExplicitFetching(n *xml.Name) bool {
@@ -435,10 +428,10 @@ func readPropfind(r io.Reader) (pf propfindXML, status int, err error) {
 	return pf, 0, nil
 }
 
-func (s *svc) multistatusResponse(ctx context.Context, pf *propfindXML, mds []*provider.ResourceInfo, ns string, usershares, linkshares map[string]struct{}) (string, error) {
+func (s *svc) multistatusResponse(ctx context.Context, pf *propfindXML, mds []*provider.ResourceInfo, parent *provider.ResourceInfo, ns, href string, usershares, linkshares map[string]struct{}) (string, error) {
 	responses := make([]*responseXML, 0, len(mds))
 	for i := range mds {
-		res, err := s.mdToPropResponse(ctx, pf, mds[i], ns, usershares, linkshares)
+		res, err := s.mdToPropResponse(ctx, pf, mds[i], parent, ns, href, usershares, linkshares)
 		if err != nil {
 			return "", err
 		}
@@ -452,6 +445,7 @@ func (s *svc) multistatusResponse(ctx context.Context, pf *propfindXML, mds []*p
 	msg := `<?xml version="1.0" encoding="utf-8"?><d:multistatus xmlns:d="DAV:" `
 	msg += `xmlns:s="http://sabredav.org/ns" xmlns:oc="http://owncloud.org/ns">`
 	msg += string(responsesXML) + `</d:multistatus>`
+
 	return msg, nil
 }
 
@@ -487,48 +481,6 @@ func (s *svc) newPropRaw(key, val string) *propertyXML {
 	}
 }
 
-// Compute the URL of the resource in the spaces format:
-// baseURI + /<space_id>/relative/path/to/space
-// The space_id MUST be set on `md`.
-// The path of the space root it is calculated from `md.Id.SpaceId`
-// Note that the path on `md.Path` must also be set, and must be a path relative to the space root.
-func spaceHref(ctx context.Context, baseURI string, md *provider.ResourceInfo) (string, error) {
-	if ocm, _ := ctx.Value(ctxOCM).(bool); ocm {
-		// /<token>/ was injected in front of the OCM path for the routing to work, we now remove it (see internal/http/services/owncloud/ocdav/dav.go)
-		_, md.Path = router.ShiftPath(md.Path)
-	}
-
-	if linkToken, _ := ctx.Value(ctxPublicLink).(string); linkToken != "" {
-		_, relativePath := router.ShiftPath(md.Path)
-		_, relativePath = router.ShiftPath(relativePath)
-		return path.Join(baseURI, linkToken, relativePath), nil
-	}
-
-	if md.Id == nil || md.Id.SpaceId == "" {
-		return "", errors.New("Space ID must be set to calculate Href")
-	}
-
-	storageSpaceID := spaces.ConcatStorageSpaceID(md.Id.StorageId, md.Id.SpaceId)
-	_, spacePath, ok := spaces.DecodeStorageSpaceID(storageSpaceID)
-	if !ok {
-		return "", errors.New("Failed to decode space ID")
-	}
-
-	relativePath, err := filepath.Rel(spacePath, md.Path)
-	if err != nil {
-		return "", errors.Wrapf(err, "failed to calculate path relative to space root: %v", spacePath)
-	}
-
-	// When requesting for versions, the request URL is baseURI=/remote.php/dav/meta/<resource-id>
-	// When listing other resources, its value is baseURI=/remote.php/dav/spaces.
-	// Because of this, a different response is expected, without the storageSpaceID.
-	if md.Id.StorageId == "versions" {
-		return path.Join(baseURI, relativePath), nil
-	}
-
-	return path.Join(baseURI, storageSpaceID, relativePath), nil
-}
-
 func appendSlash(path string) string {
 	if path == "" {
 		return "/"
@@ -553,43 +505,41 @@ func (s *svc) isOpenable(path string) bool {
 // mdToPropResponse converts the CS3 metadata into a webdav PropResponse
 // ns is the CS3 namespace that needs to be removed from the CS3 path before
 // prefixing it with the baseURI.
-func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provider.ResourceInfo, ns string, usershares, linkshares map[string]struct{}) (*responseXML, error) {
+// hrefBase is the base of the `href` value, to which the `md`'s relative path to it's `parent` will be appended
+// in case no parent is given, the resource's space id + it's path relative to the space root is given
+func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provider.ResourceInfo, parent *provider.ResourceInfo, ns, hrefBase string, usershares, linkshares map[string]struct{}) (*responseXML, error) {
 	sublog := appctx.GetLogger(ctx).With().Str("ns", ns).Logger()
 
-	spacesEnabled := s.c.SpacesEnabled
-
-	baseURI := ctx.Value(ctxKeyBaseURI).(string)
-	var ref string
-	var err error
-	if spacesEnabled {
-		ref, err = spaceHref(ctx, baseURI, md)
+	var href string
+	if parent != nil {
+		relativePath, err := filepath.Rel(parent.Path, md.Path)
 		if err != nil {
-			pxml := propstatXML{
-				Status: "HTTP/1.1 400 Bad Request",
-				Prop:   []*propertyXML{},
-			}
-
-			return &responseXML{
-				Href:     encodePath(ref),
-				Propstat: []propstatXML{pxml},
-			}, err
-
+			return nil, errors.Wrapf(err, "failed to calculate path relative to parent: %v", md.Path)
+		}
+		href, err = url.JoinPath(hrefBase, relativePath)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to join relative path with ref: %v", md.Path)
 		}
 	} else {
-		md.Path = strings.TrimPrefix(md.Path, ns)
-
-		if ocm, _ := ctx.Value(ctxOCM).(bool); ocm {
-			// /<token>/ was injected in front of the OCM path for the routing to work, we now remove it (see internal/http/services/owncloud/ocdav/dav.go)
-			_, md.Path = router.ShiftPath(md.Path)
+		// If no parent specified, we just take space id + path relative to space
+		spaceID := md.Id.SpaceId
+		spacePath, _ := spaces.DecodeSpaceID(spaceID)
+		relativePath, err := filepath.Rel(spacePath, md.Path)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to calculate path relative to space: %v. %v", spacePath, md.Path)
 		}
-		ref = path.Join(baseURI, md.Path)
+		href, err = url.JoinPath(hrefBase, spaceID, relativePath)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to join relative path with ref: %v", md.Path)
+		}
 	}
+
 	if md.Type == provider.ResourceType_RESOURCE_TYPE_CONTAINER {
-		ref += "/"
+		href, _ = url.JoinPath(href, "/")
 	}
 
 	response := responseXML{
-		Href:     encodePath(ref),
+		Href:     href,
 		Propstat: []propstatXML{},
 	}
 
@@ -615,7 +565,7 @@ func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provide
 		}
 	}
 
-	role := conversions.RoleFromResourcePermissions(md.PermissionSet)
+	role := permissions.RoleFromResourcePermissions(md.PermissionSet)
 
 	isShared := !isCurrentUserOwner(ctx, md.Owner)
 	var wdp string
@@ -648,17 +598,11 @@ func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provide
 	if pf.Allprop != nil {
 		// return all known properties
 		if md.Id != nil {
-			if spacesEnabled {
-				id := spaces.EncodeResourceID(md.Id)
-				propstatOK.Prop = append(propstatOK.Prop,
-					s.newProp("oc:id", id),
-					s.newProp("oc:fileid", id))
-			} else {
-				id := spaces.ResourceIdToString(md.Id)
-				propstatOK.Prop = append(propstatOK.Prop,
-					s.newProp("oc:id", id),
-					s.newProp("oc:fileid", id))
-			}
+			id := spaces.EncodeResourceID(md.Id)
+			propstatOK.Prop = append(propstatOK.Prop,
+				s.newProp("oc:id", id),
+				s.newProp("oc:fileid", id))
+
 		}
 
 		if md.ParentId != nil {
@@ -761,19 +705,17 @@ func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provide
 				case "fileid": // phoenix only
 					if md.Id == nil {
 						propstatNotFound.Prop = append(propstatNotFound.Prop, s.newProp("oc:fileid", ""))
-					} else if spacesEnabled {
+					} else {
 						// If our client uses spaces, we try to use the spaces-encoded file id (storage$base32(spacePath)!inode)
 						fileId, err := spaces.EncodeResourceInfo(md)
 						if err != nil {
-							log.Error().Err(err).Any("md", md).Msg("Failed to encode file id")
-							propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:fileid", spaces.EncodeResourceID(md.Id)))
+							sublog.Error().Err(err).Any("md", md).Msg("Failed to encode file id with EncodeResourceInfo")
+							fallbackId := spaces.EncodeResourceID(md.Id)
+							propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:fileid", fallbackId))
 						} else {
 							propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:fileid", fileId))
 						}
-					} else {
-						propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:fileid", spaces.ResourceIdToString(md.Id)))
 					}
-
 				case "id": // desktop client only
 					if md.Id != nil {
 						propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:id", spaces.EncodeResourceID(md.Id)))
@@ -782,11 +724,7 @@ func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provide
 					}
 				case "file-parent":
 					if md.ParentId != nil {
-						if spacesEnabled {
-							propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:file-parent", spaces.EncodeResourceID(md.ParentId)))
-						} else {
-							propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:file-parent", spaces.ResourceIdToString(md.ParentId)))
-						}
+						propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:file-parent", spaces.EncodeResourceID(md.ParentId)))
 					} else {
 						propstatNotFound.Prop = append(propstatNotFound.Prop, s.newProp("oc:file-parent", ""))
 					}
@@ -979,6 +917,7 @@ func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provide
 							path = sb.String()
 						}
 						relativePath := strings.TrimPrefix(path, "/public")
+						baseURI := ctx.Value(ctxKeyBaseURI).(string)
 						propstatOK.Prop = append(propstatOK.Prop, s.newProp("oc:downloadURL", s.c.PublicURL+baseURI+relativePath))
 					} else {
 						propstatNotFound.Prop = append(propstatNotFound.Prop, s.newProp("oc:"+pf.Prop[i].Local, ""))
@@ -1099,8 +1038,8 @@ func (s *svc) mdToPropResponse(ctx context.Context, pf *propfindXML, md *provide
 						perms := role.OCSPermissions()
 						// shared files cant have the create or delete permission set
 						if md.Type == provider.ResourceType_RESOURCE_TYPE_FILE {
-							perms &^= conversions.PermissionCreate
-							perms &^= conversions.PermissionDelete
+							perms &^= permissions.PermissionCreate
+							perms &^= permissions.PermissionDelete
 						}
 						propstatOK.Prop = append(propstatOK.Prop, s.newPropNS(pf.Prop[i].Space, pf.Prop[i].Local, strconv.FormatUint(uint64(perms), 10)))
 					}

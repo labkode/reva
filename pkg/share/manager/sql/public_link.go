@@ -31,6 +31,7 @@ import (
 	"github.com/cs3org/reva/v3/pkg/appctx"
 	conversions "github.com/cs3org/reva/v3/pkg/cbox/utils"
 	"github.com/cs3org/reva/v3/pkg/errtypes"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 	"github.com/cs3org/reva/v3/pkg/publicshare"
 	"github.com/cs3org/reva/v3/pkg/share/manager/sql/model"
 	"github.com/cs3org/reva/v3/pkg/utils"
@@ -45,7 +46,7 @@ import (
 )
 
 type PublicShareMgr struct {
-	c  *config
+	c  *Config
 	db *gorm.DB
 }
 
@@ -54,11 +55,12 @@ type ExpiryRange struct {
 	To   time.Time
 }
 
-func NewPublicShareManager(ctx context.Context, m map[string]interface{}) (publicshare.Manager, error) {
-	var c config
+func NewPublicShareManager(ctx context.Context, m map[string]any) (publicshare.Manager, error) {
+	var c Config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
 	}
+	c.ApplyDefaults()
 
 	db, err := getDb(c)
 	if err != nil {
@@ -108,18 +110,15 @@ func (m *PublicShareMgr) CreatePublicShare(ctx context.Context, u *user.User, md
 		return nil, errors.Wrap(err, "failed to create id for PublicShare")
 	}
 
-	publiclink.BaseModel = model.BaseModel{
-		Id:      id,
-		ShareId: model.ShareID{ID: id},
-	}
-
+	publiclink.Id = id
+	publiclink.ShareId = model.ShareID{ID: id}
 	publiclink.UIDOwner = conversions.FormatUserID(md.Owner)
 	publiclink.UIDInitiator = conversions.FormatUserID(user.Id)
 	publiclink.InitialPath = md.Path
 	publiclink.ItemType = model.ItemType(conversions.ResourceTypeToItem(md.Type))
 	publiclink.Inode = md.Id.OpaqueId
 	publiclink.Instance = md.Id.StorageId
-	publiclink.Permissions = uint8(conversions.SharePermToInt(g.Permissions.Permissions))
+	publiclink.Permissions = uint8(permissions.OCSFromCS3Permission(g.Permissions.Permissions))
 	publiclink.Orphan = false
 
 	if g.Password != "" {
@@ -158,10 +157,10 @@ func (m *PublicShareMgr) UpdatePublicShare(ctx context.Context, u *user.User, re
 			Where("id = ?", publiclink.Id).
 			Update("link_name", req.Update.GetDisplayName())
 	case link.UpdatePublicShareRequest_Update_TYPE_PERMISSIONS:
-		permissions := conversions.SharePermToInt(req.Update.GetGrant().GetPermissions().Permissions)
+		perms := uint8(permissions.OCSFromCS3Permission(req.Update.GetGrant().GetPermissions().Permissions))
 		res = m.db.Model(&publiclink).
 			Where("id = ?", publiclink.Id).
-			Update("permissions", uint8(permissions))
+			Update("permissions", perms)
 	case link.UpdatePublicShareRequest_Update_TYPE_EXPIRATION:
 		if req.Update.GetGrant().Expiration == nil {
 			res = m.db.Model(&publiclink).
@@ -511,9 +510,7 @@ func emptyLinkWithId(id string) (*model.PublicLink, error) {
 	}
 	link := &model.PublicLink{
 		ProtoShare: model.ProtoShare{
-			BaseModel: model.BaseModel{
-				Id: uint(intId),
-			},
+			Id: uint(intId),
 		},
 	}
 	return link, nil

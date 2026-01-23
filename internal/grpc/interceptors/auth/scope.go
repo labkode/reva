@@ -22,6 +22,7 @@ import (
 	"context"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -53,7 +54,7 @@ const (
 	scopeCacheExpiration = 3600
 )
 
-func expandAndVerifyScope(ctx context.Context, req interface{}, tokenScope map[string]*authpb.Scope, user *userpb.User, gatewayAddr string, mgr token.Manager) error {
+func expandAndVerifyScope(ctx context.Context, req any, tokenScope map[string]*authpb.Scope, user *userpb.User, gatewayAddr string, mgr token.Manager) error {
 	log := appctx.GetLogger(ctx)
 	client, err := pool.GetGatewayServiceClient(pool.Endpoint(gatewayAddr))
 	if err != nil {
@@ -88,14 +89,12 @@ func expandAndVerifyScope(ctx context.Context, req interface{}, tokenScope map[s
 				log.Err(err).Msgf("error resolving reference %s under scope %+v", ref.String(), k)
 			}
 		}
-	} else {
-		log.Trace().Msgf("Token scope is not ok. req:%+v, tokenScope:%+v", req, tokenScope)
 	}
-
 	if checkLightweightScope(ctx, req, tokenScope, client) {
 		return nil
 	}
 
+	log.Info().Interface("req", req).Str("rtype", reflect.TypeOf(req).String()).Interface("scope", tokenScope).Msg("Token scope is not ok for request")
 	return errtypes.PermissionDenied("access to resource not allowed within the assigned scope")
 }
 
@@ -108,7 +107,7 @@ func hasLightweightScope(tokenScope map[string]*authpb.Scope) bool {
 	return false
 }
 
-func checkLightweightScope(ctx context.Context, req interface{}, tokenScope map[string]*authpb.Scope, client gateway.GatewayAPIClient) bool {
+func checkLightweightScope(ctx context.Context, req any, tokenScope map[string]*authpb.Scope, client gateway.GatewayAPIClient) bool {
 	if !hasLightweightScope(tokenScope) {
 		return false
 	}
@@ -139,6 +138,10 @@ func checkLightweightScope(ctx context.Context, req interface{}, tokenScope map[
 			InitiateFileDownload: true,
 		})
 	case *gateway.OpenInAppRequest:
+		return hasPermissions(ctx, client, r.GetRef(), &provider.ResourcePermissions{
+			InitiateFileDownload: true,
+		})
+	case *provider.GetLockRequest:
 		return hasPermissions(ctx, client, r.GetRef(), &provider.ResourcePermissions{
 			InitiateFileDownload: true,
 		})
@@ -182,6 +185,22 @@ func checkLightweightScope(ctx context.Context, req interface{}, tokenScope map[
 			return false
 		}
 		return hasPermissions(ctx, client, parent, &provider.ResourcePermissions{
+			InitiateFileUpload: true,
+		})
+	case *provider.SetArbitraryMetadataRequest:
+		return hasPermissions(ctx, client, r.GetRef(), &provider.ResourcePermissions{
+			InitiateFileUpload: true,
+		})
+	case *provider.SetLockRequest:
+		return hasPermissions(ctx, client, r.GetRef(), &provider.ResourcePermissions{
+			InitiateFileUpload: true,
+		})
+	case *provider.RefreshLockRequest:
+		return hasPermissions(ctx, client, r.GetRef(), &provider.ResourcePermissions{
+			InitiateFileUpload: true,
+		})
+	case *provider.UnlockRequest:
+		return hasPermissions(ctx, client, r.GetRef(), &provider.ResourcePermissions{
 			InitiateFileUpload: true,
 		})
 	}
@@ -327,7 +346,7 @@ func checkIfNestedResource(ctx context.Context, ref *provider.Reference, parent 
 	return strings.HasPrefix(childPath, parentPath), nil
 }
 
-func extractRefForReaderRole(req interface{}) (*provider.Reference, bool) {
+func extractRefForReaderRole(req any) (*provider.Reference, bool) {
 	switch v := req.(type) {
 	// Read requests
 	case *provider.GetPathRequest:
@@ -355,7 +374,7 @@ func extractRefForReaderRole(req interface{}) (*provider.Reference, bool) {
 	return nil, false
 }
 
-func extractRefForUploaderRole(req interface{}) (*provider.Reference, bool) {
+func extractRefForUploaderRole(req any) (*provider.Reference, bool) {
 	switch v := req.(type) {
 	// Write Requests
 	case *provider.GetPathRequest:
@@ -375,7 +394,7 @@ func extractRefForUploaderRole(req interface{}) (*provider.Reference, bool) {
 	return nil, false
 }
 
-func extractRefForEditorRole(req interface{}) (*provider.Reference, bool) {
+func extractRefForEditorRole(req any) (*provider.Reference, bool) {
 	switch v := req.(type) {
 	// Remaining edit Requests
 	case *provider.GetPathRequest:
@@ -399,7 +418,7 @@ func extractRefForEditorRole(req interface{}) (*provider.Reference, bool) {
 	return nil, false
 }
 
-func extractRef(req interface{}, tokenScope map[string]*authpb.Scope) (*provider.Reference, bool) {
+func extractRef(req any, tokenScope map[string]*authpb.Scope) (*provider.Reference, bool) {
 	var readPerm, uploadPerm, editPerm bool
 	for _, v := range tokenScope {
 		if v.Role == authpb.Role_ROLE_OWNER || v.Role == authpb.Role_ROLE_EDITOR || v.Role == authpb.Role_ROLE_VIEWER {

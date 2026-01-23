@@ -22,6 +22,7 @@ import (
 	"context"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -495,9 +496,15 @@ func (s *svc) Stat(ctx context.Context, req *provider.StatRequest) (*provider.St
 		}
 		rsp, err := c.Stat(ctx, req)
 		if err != nil || rsp.Status.Code != rpc.Code_CODE_OK {
-			log.Error().Err(err).Msg("Failed to stat " + resPath)
+			log.Warn().Err(err).Any("resp", rsp).Msgf("Failed to stat %+v", req.Ref)
 			return rsp, err
 		}
+		log.Debug().
+			Str("storage_id", rsp.Info.Id.StorageId).
+			Str("space_id", rsp.Info.Id.SpaceId).
+			Str("opaque_id", rsp.Info.Id.OpaqueId).
+			Str("path", rsp.Info.Path).
+			Msg("gateway: Stat response from storage provider")
 		return rsp, nil
 	}
 
@@ -547,12 +554,7 @@ func (s *svc) isPathAllowed(cat string, path string) bool {
 		return true
 	}
 
-	for _, userAgent := range allowedUserAgents {
-		if userAgent == cat {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedUserAgents, cat)
 }
 
 func (s *svc) listContainerAcrossProviders(ctx context.Context, req *provider.ListContainerRequest, providers []*registry.ProviderInfo) (*provider.ListContainerResponse, error) {

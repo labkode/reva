@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"strconv"
 
 	erpc "github.com/cern-eos/go-eosgrpc"
@@ -308,7 +309,7 @@ func (c *Client) List(ctx context.Context, auth eosclient.Authorization, path st
 func (c *Client) ListWithRegex(ctx context.Context, auth eosclient.Authorization, path string, depth uint, regex string) ([]*eosclient.FileInfo, error) {
 	log := appctx.GetLogger(ctx)
 	result, err := c.list(ctx, auth, path, regex, depth)
-	log.Info().Str("path", path).Str("regex", regex).Any("results", result).Msg("ListWithRegex")
+	log.Info().Str("path", path).Str("regex", regex).Msg("ListWithRegex")
 
 	return result, err
 }
@@ -354,7 +355,6 @@ func (c *Client) list(ctx context.Context, auth eosclient.Authorization, dpath s
 	log.Info().Str("func", "List").Str("path", dpath).Any("resp", resp).Msg("findrequest grpc response")
 	if err != nil {
 		log.Error().Err(err).Str("func", "List").Str("path", dpath).Any("resp", resp).Str("err", err.Error()).Msg("findrequest grpc response")
-
 		return nil, err
 	}
 
@@ -370,14 +370,11 @@ func (c *Client) list(ctx context.Context, auth eosclient.Authorization, dpath s
 			if err == io.EOF {
 				log.Debug().Str("path", dpath).Int("nitems", i).Msg("OK, no more items, clean exit")
 				break
-			}
-
-			// We got an error while reading items. We return the error to the user and break off the List operation
-			// We do not want to return a partial list, because then a sync client may delete local files that are missing on the server
-			log.Error().Err(err).Str("func", "List").Int("nitems", i).Str("path", dpath).Str("got err from EOS", err.Error()).Msg("")
-			if i > 0 {
-				log.Error().Str("path", dpath).Int("nitems", i).Msg("No more items, dirty exit")
-				return nil, errors.Wrap(err, "Error listing files")
+			} else {
+				// We got an error while reading items. We return the error to the user and break off the List operation
+				// We do not want to return a partial list, because then a sync client may delete local files that are missing on the server
+				log.Error().Err(err).Str("func", "List").Int("nitems", i).Str("path", dpath).Msg("Got err from EOS on List operation")
+				return nil, err
 			}
 		}
 
@@ -420,8 +417,6 @@ func (c *Client) list(ctx context.Context, auth eosclient.Authorization, dpath s
 		mylst = append(mylst, myitem)
 	}
 
-	log.Info().Any("resp-list", mylst).Msg("FindRequest raw response")
-
 	for _, fi := range mylst {
 		if fi.SysACL == nil {
 			fi.SysACL = &acl.ACLs{
@@ -441,9 +436,7 @@ func (c *Client) list(ctx context.Context, auth eosclient.Authorization, dpath s
 				if vf.SysACL != nil {
 					fi.SysACL.Entries = append(fi.SysACL.Entries, vf.SysACL.Entries...)
 				}
-				for k, v := range vf.Attrs {
-					fi.Attrs[k] = v
-				}
+				maps.Copy(fi.Attrs, vf.Attrs)
 			} else if err := c.CreateDir(ctx, *ownerAuth, versionFolderPath); err == nil {
 				// Create the version folder if it doesn't exist
 				if md, err := c.GetFileInfoByPath(ctx, auth, versionFolderPath); err == nil {

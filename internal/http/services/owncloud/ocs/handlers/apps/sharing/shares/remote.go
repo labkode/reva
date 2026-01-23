@@ -22,7 +22,6 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
-	"strings"
 
 	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/app/provider/v1beta1"
 	gatewayv1beta1 "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
@@ -33,7 +32,9 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	ocmd "github.com/cs3org/reva/v3/internal/http/services/opencloudmesh/ocmd"
 	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/response"
 	"github.com/cs3org/reva/v3/pkg/appctx"
 	"github.com/cs3org/reva/v3/pkg/ocm/share"
@@ -43,7 +44,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func (h *Handler) createFederatedCloudShare(w http.ResponseWriter, r *http.Request, resource *provider.ResourceInfo, role *conversions.Role, roleVal []byte) {
+func (h *Handler) createFederatedCloudShare(w http.ResponseWriter, r *http.Request, resource *provider.ResourceInfo, role *permissions.Role, roleVal []byte) {
 	ctx := r.Context()
 
 	c, err := pool.GetGatewayServiceClient(pool.Endpoint(h.gatewayAddr))
@@ -155,11 +156,11 @@ func (h *Handler) createFederatedCloudShare(w http.ResponseWriter, r *http.Reque
 	response.WriteOCSSuccess(w, r, data)
 }
 
-func getViewModeFromRole(role *conversions.Role) providerv1beta1.ViewMode {
+func getViewModeFromRole(role *permissions.Role) providerv1beta1.ViewMode {
 	switch role.Name {
-	case conversions.RoleViewer:
+	case permissions.RoleViewer:
 		return providerv1beta1.ViewMode_VIEW_MODE_READ_ONLY
-	case conversions.RoleEditor:
+	case permissions.RoleEditor:
 		return providerv1beta1.ViewMode_VIEW_MODE_READ_WRITE
 	}
 	return providerv1beta1.ViewMode_VIEW_MODE_INVALID
@@ -268,10 +269,7 @@ func (h *Handler) mapUserIdsFederatedShare(ctx context.Context, gw gatewayv1beta
 	}
 }
 
-func (h *Handler) mustGetRemoteUser(ctx context.Context, gw gatewayv1beta1.GatewayAPIClient, id string) *userIdentifiers {
-	s := strings.SplitN(id, "@", 2)
-	opaqueID, idp := s[0], s[1]
-
+func (h *Handler) mustGetRemoteUser(ctx context.Context, gw gatewayv1beta1.GatewayAPIClient, ocmAddress string) *userIdentifiers {
 	user := appctx.ContextMustGetUser(ctx)
 	d, err := utils.MarshalProtoV1ToJSON(user.Id)
 	if err != nil {
@@ -287,12 +285,13 @@ func (h *Handler) mustGetRemoteUser(ctx context.Context, gw gatewayv1beta1.Gatew
 		},
 	}
 
+	remoteUserId, err := ocmd.GetUserIdFromOCMAddress(ocmAddress)
+	if err != nil {
+		return &userIdentifiers{}
+	}
 	userRes, err := gw.GetAcceptedUser(ctx, &invitepb.GetAcceptedUserRequest{
-		RemoteUserId: &userpb.UserId{
-			Idp:      idp,
-			OpaqueId: opaqueID,
-		},
-		Opaque: o,
+		RemoteUserId: remoteUserId,
+		Opaque:       o,
 	})
 	if err != nil {
 		return &userIdentifiers{}

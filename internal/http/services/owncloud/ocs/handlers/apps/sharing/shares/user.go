@@ -35,11 +35,12 @@ import (
 	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
 	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/response"
 	"github.com/cs3org/reva/v3/pkg/appctx"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 
 	"github.com/cs3org/reva/v3/pkg/rgrpc/todo/pool"
 )
 
-func (h *Handler) createUserShare(w http.ResponseWriter, r *http.Request, statInfo *provider.ResourceInfo, role *conversions.Role, roleVal []byte) {
+func (h *Handler) createUserShare(w http.ResponseWriter, r *http.Request, statInfo *provider.ResourceInfo, role *permissions.Role, roleVal []byte) {
 	ctx := r.Context()
 	c, err := pool.GetGatewayServiceClient(pool.Endpoint(h.gatewayAddr))
 	if err != nil {
@@ -325,7 +326,7 @@ func (h *Handler) listUserShares(r *http.Request, filters []*collaboration.Filte
 	input := make(chan *collaboration.Share, len(lsUserSharesResponse.Shares))
 	output := make(chan *conversions.ShareData, len(lsUserSharesResponse.Shares))
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Add(1)
 		go func(ctx context.Context, client gateway.GatewayAPIClient, input chan *collaboration.Share, output chan *conversions.ShareData, wg *sync.WaitGroup) {
 			defer wg.Done()

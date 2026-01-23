@@ -27,7 +27,7 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 
 	"github.com/cs3org/reva/v3/pkg/appctx"
 	"github.com/cs3org/reva/v3/pkg/auth/scope"
@@ -79,7 +79,7 @@ func checkCalled(called *[]string, expected string) {
 var _ = Describe("Nextcloud", func() {
 	var (
 		ctx     context.Context
-		options map[string]interface{}
+		options map[string]any
 		tmpRoot string
 		user    = &userpb.User{
 			Id: &userpb.UserId{
@@ -94,7 +94,7 @@ var _ = Describe("Nextcloud", func() {
 	BeforeEach(func() {
 		var err error
 
-		options = map[string]interface{}{
+		options = map[string]any{
 			"endpoint":  "http://mock.com/",
 			"mock_http": true,
 		}
@@ -102,7 +102,7 @@ var _ = Describe("Nextcloud", func() {
 		ctx = context.Background()
 
 		// Add auth token
-		tokenManager, err := jwt.New(map[string]interface{}{"secret": "changemeplease"})
+		tokenManager, err := jwt.New(map[string]any{"secret": "changemeplease"})
 		Expect(err).ToNot(HaveOccurred())
 		scope, err := scope.AddOwnerScope(nil)
 		Expect(err).ToNot(HaveOccurred())
@@ -283,7 +283,7 @@ var _ = Describe("Nextcloud", func() {
 					OpaqueId: "f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c",
 				},
 				AccessMethods: []*ocm.AccessMethod{
-					ocmshare.NewWebDavAccessMethod(conversions.NewEditorRole().CS3ResourcePermissions(), []string{}),
+					ocmshare.NewWebDavAccessMethod(permissions.NewEditorRole().CS3ResourcePermissions(), []string{}),
 					ocmshare.NewWebappAccessMethod(appprovider.ViewMode_VIEW_MODE_READ_WRITE),
 					ocmshare.NewTransferAccessMethod(),
 				},
@@ -422,7 +422,7 @@ var _ = Describe("Nextcloud", func() {
 				},
 				ShareType: ocm.ShareType_SHARE_TYPE_USER,
 				AccessMethods: []*ocm.AccessMethod{
-					ocmshare.NewWebDavAccessMethod(conversions.NewEditorRole().CS3ResourcePermissions(), []string{}),
+					ocmshare.NewWebDavAccessMethod(permissions.NewEditorRole().CS3ResourcePermissions(), []string{}),
 					ocmshare.NewWebappAccessMethod(appprovider.ViewMode_VIEW_MODE_READ_WRITE),
 					ocmshare.NewTransferAccessMethod(),
 				},
@@ -438,7 +438,7 @@ var _ = Describe("Nextcloud", func() {
 			am, called, teardown := setUpNextcloudServer()
 			defer teardown()
 
-			receivedShares, err := am.ListReceivedShares(ctx, user)
+			receivedShares, err := am.ListReceivedShares(ctx, user, []*ocm.ListReceivedOCMSharesRequest_Filter{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(len(receivedShares)).To(Equal(1))
 			Expect(receivedShares[0]).To(Equal(&ocm.ReceivedShare{
@@ -474,7 +474,7 @@ var _ = Describe("Nextcloud", func() {
 				ResourceType: provider.ResourceType_RESOURCE_TYPE_FILE,
 				Protocols: []*ocm.Protocol{
 					ocmshare.NewWebDAVProtocol("webdav-uri", "some-token", &ocm.SharePermissions{
-						Permissions: conversions.NewEditorRole().CS3ResourcePermissions(),
+						Permissions: permissions.NewEditorRole().CS3ResourcePermissions(),
 					}, []string{}),
 					ocmshare.NewWebappProtocol("app-uri-template", appprovider.ViewMode_VIEW_MODE_READ_WRITE),
 					ocmshare.NewTransferProtocol("source-uri", "some-token", 1),
@@ -532,7 +532,7 @@ var _ = Describe("Nextcloud", func() {
 				ResourceType: provider.ResourceType_RESOURCE_TYPE_FILE,
 				Protocols: []*ocm.Protocol{
 					ocmshare.NewWebDAVProtocol("webdav-uri", "some-token", &ocm.SharePermissions{
-						Permissions: conversions.NewEditorRole().CS3ResourcePermissions(),
+						Permissions: permissions.NewEditorRole().CS3ResourcePermissions(),
 					}, []string{}),
 					ocmshare.NewWebappProtocol("app-uri-template", appprovider.ViewMode_VIEW_MODE_READ_WRITE),
 					ocmshare.NewTransferProtocol("source-uri", "some-token", 1),
@@ -621,7 +621,7 @@ var _ = Describe("Nextcloud", func() {
 				ResourceType: provider.ResourceType_RESOURCE_TYPE_FILE,
 				Protocols: []*ocm.Protocol{
 					ocmshare.NewWebDAVProtocol("webdav-uri", "some-token", &ocm.SharePermissions{
-						Permissions: conversions.NewEditorRole().CS3ResourcePermissions(),
+						Permissions: permissions.NewEditorRole().CS3ResourcePermissions(),
 					}, []string{}),
 					ocmshare.NewWebappProtocol("app-uri-template", appprovider.ViewMode_VIEW_MODE_READ_WRITE),
 					ocmshare.NewTransferProtocol("source-uri", "some-token", 1),

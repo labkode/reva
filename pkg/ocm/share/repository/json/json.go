@@ -45,7 +45,7 @@ func init() {
 }
 
 // New returns a new authorizer object.
-func New(ctx context.Context, m map[string]interface{}) (share.Repository, error) {
+func New(ctx context.Context, m map[string]any) (share.Repository, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -436,7 +436,7 @@ func (m *mgr) StoreReceivedShare(ctx context.Context, share *ocm.ReceivedShare) 
 	return share, nil
 }
 
-func (m *mgr) ListReceivedShares(ctx context.Context, user *userpb.User) ([]*ocm.ReceivedShare, error) {
+func (m *mgr) ListReceivedShares(ctx context.Context, user *userpb.User, filters []*ocm.ListReceivedOCMSharesRequest_Filter) ([]*ocm.ReceivedShare, error) {
 	var rss []*ocm.ReceivedShare
 	m.Lock()
 	defer m.Unlock()

@@ -73,7 +73,7 @@ func (c *config) ApplyDefaults() {
 
 // New creates an OCM storage driver.
 // This driver exposes remote OCM resources to local users.
-func New(ctx context.Context, m map[string]interface{}) (storage.FS, error) {
+func New(ctx context.Context, m map[string]any) (storage.FS, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -251,7 +251,7 @@ func convertStatToResourceInfo(f fs.FileInfo, share *ocmpb.ReceivedShare, relPat
 	}
 
 	var name string
-	if share.ResourceType == provider.ResourceType_RESOURCE_TYPE_FILE {
+	if share.SharedResourceType == ocmpb.SharedResourceType_SHARE_RESOURCE_TYPE_FILE {
 		name = share.Name
 	} else {
 		name = f.Name()

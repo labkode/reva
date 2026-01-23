@@ -3,9 +3,11 @@ package ocgraph
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	gatewayv1beta1 "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
@@ -15,7 +17,7 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 	"github.com/cs3org/reva/v3/pkg/appctx"
 	"github.com/cs3org/reva/v3/pkg/errtypes"
 	"github.com/cs3org/reva/v3/pkg/spaces"
@@ -52,9 +54,11 @@ func (s *svc) getDrivePermissions(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+
 	actions, roles, perms, err := s.getPermissionsByCs3Reference(ctx, &provider.Reference{
 		ResourceId: resourceID,
 	})
+
 	if err != nil {
 		log.Error().Err(err).Msg("error getting permissions by cs3 reference")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -602,9 +606,12 @@ func (s *svc) getPermissionsByCs3Reference(ctx context.Context, ref *provider.Re
 			},
 		},
 	})
-	if err != nil || statRes.Status.Code != rpcv1beta1.Code_CODE_OK {
-		log.Error().Interface("ref", ref).Int("code", int(statRes.Status.Code)).Str("message", statRes.Status.Message).Msg("error statting resource")
+	if err != nil {
+		log.Error().Err(err).Interface("ref", ref).Msg("error statting resource")
 		return nil, nil, nil, err
+	} else if statRes.Status.Code != rpcv1beta1.Code_CODE_OK {
+		log.Error().Interface("ref", ref).Int("code", int(statRes.Status.Code)).Str("message", statRes.Status.Message).Msg("error statting resource")
+		return nil, nil, nil, fmt.Errorf("failed to stat: code %d with message %s", statRes.Status.Code, statRes.Status.Message)
 	}
 	perms = make([]*libregraph.Permission, 0)
 	shares, err := s.getSharesForResource(ctx, gw, statRes.Info)
@@ -801,7 +808,7 @@ func (s *svc) getLinkUpdates(ctx context.Context, link *linkv1beta1.PublicShare,
 	if permission.Link != nil && permission.Link.Type != nil {
 		isEditorLink = permission.Link.GetType() == libregraph.EDIT
 	} else if link.Permissions != nil {
-		isEditorLink = conversions.RoleFromResourcePermissions(link.Permissions.Permissions).Name == conversions.RoleEditor
+		isEditorLink = permissions.RoleFromResourcePermissions(link.Permissions.Permissions).Name == permissions.RoleEditor
 	}
 
 	// Check for update of expiration
@@ -881,12 +888,36 @@ func (s *svc) getLinkUpdates(ctx context.Context, link *linkv1beta1.PublicShare,
 	// Check for setting NotifyUploads
 	if len(permission.LibreGraphPermissionsActions) > 0 {
 		if slices.Contains(permission.LibreGraphPermissionsActions, "notifyUploads") {
+			// Now we check: for the user itself, or a third party notification?
+			if len(permission.GrantedToIdentities) > 0 {
+				receivers := []string{}
+				for _, identity := range permission.GrantedToIdentities {
+					if identity.User != nil && identity.User.Id != nil {
+						receivers = append(receivers, *identity.User.Id)
+					} else if identity.Group != nil && identity.Group.Id != nil {
+						receivers = append(receivers, *identity.Group.Id)
+					}
+				}
+				updates = append(updates, &linkv1beta1.UpdatePublicShareRequest_Update{
+					Type:                         linkv1beta1.UpdatePublicShareRequest_Update_TYPE_NOTIFYUPLOADSEXTRARECIPIENTS,
+					NotifyUploadsExtraRecipients: strings.Join(receivers, ","),
+				})
+			} else {
+				updates = append(updates, &linkv1beta1.UpdatePublicShareRequest_Update{
+					Type:          linkv1beta1.UpdatePublicShareRequest_Update_TYPE_NOTIFYUPLOADS,
+					NotifyUploads: true,
+				})
+			}
+		}
+	} else {
+		if link.NotifyUploads {
 			updates = append(updates, &linkv1beta1.UpdatePublicShareRequest_Update{
 				Type:          linkv1beta1.UpdatePublicShareRequest_Update_TYPE_NOTIFYUPLOADS,
-				NotifyUploads: true,
+				NotifyUploads: false,
 			})
 		}
 	}
+
 	if len(updates) == 0 {
 		return nil, errors.New("body contained nothing to update")
 	}

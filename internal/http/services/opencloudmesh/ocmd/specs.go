@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"strings"
 
+	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	ocmshare "github.com/cs3org/reva/v3/pkg/ocm/share"
@@ -55,6 +56,20 @@ func (r *InviteAcceptedRequest) toJSON() ([]byte, error) {
 	return json.Marshal(&r)
 }
 
+// DirectoryService represents a directory service listing per OCM spec Appendix C.
+type DirectoryService struct {
+	Federation string                   `json:"federation"`
+	Servers    []DirectoryServiceServer `json:"servers"`
+}
+
+// DirectoryServiceServer represents a single OCM server in a directory service.
+type DirectoryServiceServer struct {
+	DisplayName string `json:"displayName"`
+	URL         string `json:"url"`
+	// Added after discovery, not in raw response
+	InviteAcceptDialog string `json:"inviteAcceptDialog,omitempty"`
+}
+
 // NewShareRequest contains the payload of an OCM /share request.
 // https://cs3org.github.io/OCM-API/docs.html?branch=develop&repo=OCM-API&user=cs3org#/paths/~1shares/post
 type NewShareRequest struct {
@@ -68,7 +83,7 @@ type NewShareRequest struct {
 	SenderDisplayName string    `json:"senderDisplayName"`                                      // dispay name of the user who wants to share the resource
 	Code              string    `json:"code"`                                                   // nonce to be exchanged for a bearer token (not implemented for now)
 	ShareType         string    `json:"shareType"         validate:"required,oneof=user group"` // recipient share type (user or group)
-	ResourceType      string    `json:"resourceType"      validate:"required,oneof=file folder"`
+	ResourceType      string    `json:"resourceType"      validate:"required,oneof=file folder embedded"`
 	Expiration        uint64    `json:"expiration"`
 	Protocols         Protocols `json:"protocol"          validate:"required"`
 }
@@ -148,10 +163,21 @@ func (w *Datatx) ToOCMProtocol() *ocm.Protocol {
 	return ocmshare.NewTransferProtocol(w.SourceURI, w.SharedSecret, w.Size)
 }
 
+// Embedded contains the parameters for the Embedded protocol.
+type Embedded struct {
+	Payload json.RawMessage `json:"payload" validate:"required"`
+}
+
+// ToOCMProtocol convert the protocol to a ocm Protocol struct.
+func (w *Embedded) ToOCMProtocol() *ocm.Protocol {
+	return ocmshare.NewEmbeddedProtocol(string(w.Payload))
+}
+
 var protocolImpl = map[string]reflect.Type{
-	"webdav": reflect.TypeOf(WebDAV{}),
-	"webapp": reflect.TypeOf(Webapp{}),
-	"datatx": reflect.TypeOf(Datatx{}),
+	"webdav":   reflect.TypeOf(WebDAV{}),
+	"webapp":   reflect.TypeOf(Webapp{}),
+	"datatx":   reflect.TypeOf(Datatx{}),
+	"embedded": reflect.TypeOf(Embedded{}),
 }
 
 // UnmarshalJSON implements the Unmarshaler interface.
@@ -228,4 +254,29 @@ func GetProtocolName(p Protocol) string {
 	n := reflect.TypeOf(p).String()
 	s := strings.Split(n, ".")
 	return strings.ToLower(s[len(s)-1])
+}
+
+// GetUserIdFromOCMAddress parses an OCM address identifier in the form <id>@<provider>
+// according to the specifications, see https://github.com/cs3org/OCM-API/blob/develop/IETF-RFC.md#terms
+func GetUserIdFromOCMAddress(user string) (*userpb.UserId, error) {
+	last := strings.LastIndex(user, "@")
+	if last == -1 {
+		return nil, errors.New("not in the form <id>@<provider>")
+	}
+
+	id, idp := user[:last], user[last+1:]
+	if id == "" {
+		return nil, errors.New("id cannot be empty")
+	}
+	if idp == "" {
+		return nil, errors.New("provider cannot be empty")
+	}
+	idp = strings.TrimPrefix(idp, "https://") // strip off leading scheme if present (despite being not OCM compliant). This is the case in Nextcloud and oCIS
+
+	return &userpb.UserId{
+		OpaqueId: id,
+		Idp:      idp,
+		// a remote user is a federated account for the local system
+		Type: userpb.UserType_USER_TYPE_FEDERATED,
+	}, nil
 }

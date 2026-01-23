@@ -37,8 +37,8 @@ import (
 	"github.com/cs3org/reva/v3/pkg/rgrpc/todo/pool"
 	revashare "github.com/cs3org/reva/v3/pkg/share"
 	"github.com/cs3org/reva/v3/pkg/share/manager/sql/model"
-	"github.com/cs3org/reva/v3/pkg/sharedconf"
 	"github.com/cs3org/reva/v3/pkg/utils"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 	"github.com/cs3org/reva/v3/pkg/utils/cfg"
 	"google.golang.org/genproto/protobuf/field_mask"
 
@@ -50,19 +50,16 @@ import (
 )
 
 type ShareMgr struct {
-	c  *config
+	c  *Config
 	db *gorm.DB
 }
 
-func (c *config) ApplyDefaults() {
-	c.GatewaySvc = sharedconf.GetGatewaySVC(c.GatewaySvc)
-}
-
-func NewShareManager(ctx context.Context, m map[string]interface{}) (revashare.Manager, error) {
-	var c config
+func NewShareManager(ctx context.Context, m map[string]any) (revashare.Manager, error) {
+	var c Config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
 	}
+	c.ApplyDefaults()
 
 	db, err := getDb(c)
 	if err != nil {
@@ -126,18 +123,15 @@ func (m *ShareMgr) Share(ctx context.Context, md *provider.ResourceInfo, g *coll
 		return nil, errors.Wrap(err, "failed to create id for PublicShare")
 	}
 
-	share.BaseModel = model.BaseModel{
-		Id:      id,
-		ShareId: model.ShareID{ID: id},
-	}
-
+	share.Id = id
+	share.ShareId = model.ShareID{ID: id}
 	share.UIDOwner = conversions.FormatUserID(md.Owner)
 	share.UIDInitiator = conversions.FormatUserID(user.Id)
 	share.InitialPath = md.Path
 	share.ItemType = model.ItemType(conversions.ResourceTypeToItem(md.Type))
 	share.Inode = md.Id.OpaqueId
 	share.Instance = md.Id.StorageId
-	share.Permissions = uint8(conversions.SharePermToInt(g.Permissions.Permissions))
+	share.Permissions = uint8(permissions.OCSFromCS3Permission(g.Permissions.Permissions))
 	share.Orphan = false
 
 	if g.Expiration != nil {
@@ -182,8 +176,8 @@ func (m *ShareMgr) UpdateShare(ctx context.Context, ref *collaboration.ShareRefe
 
 	switch req.Field.GetField().(type) {
 	case *collaboration.UpdateShareRequest_UpdateField_Permissions:
-		permissions := conversions.SharePermToInt(req.Field.GetPermissions().Permissions)
-		res := m.db.Model(&share).Where("id = ?", share.Id).Update("permissions", uint8(permissions))
+		perms := uint8(permissions.OCSFromCS3Permission(req.Field.GetPermissions().Permissions))
+		res := m.db.Model(&share).Where("id = ?", share.Id).Update("permissions", perms)
 		if res.Error != nil {
 			return nil, res.Error
 		}
@@ -610,9 +604,7 @@ func emptyShareWithId(id string) (*model.Share, error) {
 	}
 	share := &model.Share{
 		ProtoShare: model.ProtoShare{
-			BaseModel: model.BaseModel{
-				Id: uint(intId),
-			},
+			Id: uint(intId),
 		},
 	}
 	return share, nil

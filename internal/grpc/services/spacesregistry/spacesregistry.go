@@ -31,7 +31,7 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	cachereg "github.com/cs3org/reva/v3/pkg/share/cache/registry"
 
-	"github.com/cs3org/reva/v3/internal/http/services/owncloud/ocs/conversions"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 	"github.com/cs3org/reva/v3/pkg/appctx"
 	"github.com/cs3org/reva/v3/pkg/errtypes"
 	"github.com/cs3org/reva/v3/pkg/plugin"
@@ -69,11 +69,11 @@ type config struct {
 	// name:
 	//  - path: <path>
 	//  - description: <description>
-	PublicSpaces             map[string]map[string]string      `mapstructure:"public_spaces"`
-	ResourceInfoCacheDrivers map[string]map[string]interface{} `mapstructure:"resource_info_caches"`
-	ResourceInfoCacheDriver  string                            `mapstructure:"resource_info_cache_type"`
-	ResourceInfoCacheTTL     int                               `mapstructure:"resource_info_cache_ttl"`
-	TimeoutSkipSpaces        int                               `mapstructure:"space_resolution_timeout" docs:"nil;Timeout to resolve a space with stat: if it does not respond within the given time (defaults to 3 secs), it is skipped"`
+	PublicSpaces             map[string]map[string]string `mapstructure:"public_spaces"`
+	ResourceInfoCacheDrivers map[string]map[string]any    `mapstructure:"resource_info_caches"`
+	ResourceInfoCacheDriver  string                       `mapstructure:"resource_info_cache_type"`
+	ResourceInfoCacheTTL     int                          `mapstructure:"resource_info_cache_ttl"`
+	TimeoutSkipSpaces        int                          `mapstructure:"space_resolution_timeout" docs:"nil;Timeout to resolve a space with stat: if it does not respond within the given time (defaults to 3 secs), it is skipped"`
 }
 
 func (c *config) ApplyDefaults() {
@@ -91,7 +91,7 @@ type service struct {
 	timeoutSkipSpaces    time.Duration
 }
 
-func New(ctx context.Context, m map[string]interface{}) (rgrpc.Service, error) {
+func New(ctx context.Context, m map[string]any) (rgrpc.Service, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -159,6 +159,7 @@ func countTypeFilters(filters []*provider.ListStorageSpacesRequest_Filter) (coun
 func (s *service) ListStorageSpaces(ctx context.Context, req *provider.ListStorageSpacesRequest) (*provider.ListStorageSpacesResponse, error) {
 	user := appctx.ContextMustGetUser(ctx)
 	filters := req.Filters
+	log := appctx.GetLogger(ctx)
 
 	sp := []*provider.StorageSpace{}
 	// List all spaces, or look for a specific space
@@ -282,12 +283,15 @@ func (s *service) listSpacesByType(ctx context.Context, req *provider.ListStorag
 	return sp, nil
 }
 
+// decorateProjects adds quota and mtime to each project.
+// If it fails to decorate a project, it is skipped.
 func (s *service) decorateProjects(ctx context.Context, projects []*provider.StorageSpace) ([]*provider.StorageSpace, error) {
 	log := appctx.GetLogger(ctx)
 	filtered := []*provider.StorageSpace{}
 	for _, proj := range projects {
 		timeout, cancel := context.WithTimeout(ctx, s.timeoutSkipSpaces)
 		defer cancel()
+		log.Debug().Msgf("timeout %f", s.timeoutSkipSpaces.Seconds())
 		err := s.decorateProject(timeout, proj)
 		if err != nil {
 			log.Warn().Err(err).Msgf("Failed to decorate project %s, skipping it", proj.Name)
@@ -406,14 +410,14 @@ func (s *service) userSpace(ctx context.Context, user *userpb.User) (*provider.S
 		Name:      user.Username,
 		SpaceType: spaces.SpaceTypeHome.AsString(),
 		RootInfo: &provider.ResourceInfo{
-			PermissionSet: conversions.NewManagerRole().CS3ResourcePermissions(),
+			PermissionSet: permissions.NewManagerRole().CS3ResourcePermissions(),
 			Path:          home,
 		},
 		Quota: &provider.Quota{
 			QuotaMaxBytes:  quota.TotalBytes,
 			RemainingBytes: quota.TotalBytes - quota.UsedBytes,
 		},
-		PermissionSet: conversions.NewManagerRole().CS3ResourcePermissions(),
+		PermissionSet: permissions.NewManagerRole().CS3ResourcePermissions(),
 	}, nil
 }
 

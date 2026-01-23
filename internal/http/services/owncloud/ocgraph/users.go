@@ -183,10 +183,25 @@ func (s *svc) listUsers(w http.ResponseWriter, r *http.Request) {
 		handleBadRequest(ctx, err, w)
 		return
 	}
+	// If no filter on type is specified, we default to
+	// searching only primary accounts
+	if len(filters) == 0 {
+		filters = append(filters, &userpb.Filter{
+			Type: userpb.Filter_TYPE_USERTYPE,
+			Term: &userpb.Filter_Usertype{
+				Usertype: userpb.UserType_USER_TYPE_PRIMARY,
+			},
+		})
+	}
+	filters = append(filters, &userpb.Filter{
+		Type: userpb.Filter_TYPE_QUERY,
+		Term: &userpb.Filter_Query{
+			Query: queryVal,
+		},
+	})
 	request := &userpb.FindUsersRequest{
 		SkipFetchingUserGroups: true,
-		Query:                  queryVal,
-		Filter:                 filters,
+		Filters:                filters,
 	}
 
 	users, err := gw.FindUsers(ctx, request)
@@ -238,8 +253,8 @@ func getUserSelectionFromRequest(selQuery *godata.GoDataSelectQuery) []UserSelec
 		return nil
 	}
 	selection := []UserSelectableProperty{}
-	items := strings.Split(selQuery.RawValue, ",")
-	for _, item := range items {
+	items := strings.SplitSeq(selQuery.RawValue, ",")
+	for item := range items {
 		prop := UserSelectableProperty(item)
 		if prop.Valid() {
 			selection = append(selection, prop)

@@ -71,20 +71,20 @@ func init() {
 const addSpaceInfoKey = "add_space_info"
 
 type config struct {
-	MountPath                       string                            `docs:"/;The path where the file system would be mounted."                                                           mapstructure:"mount_path"`
-	MountID                         string                            `docs:"-;The ID of the mounted file system."                                                                         mapstructure:"mount_id"`
-	Driver                          string                            `docs:"localhome;The storage driver to be used."                                                                     mapstructure:"driver"`
-	Drivers                         map[string]map[string]interface{} `docs:"url:pkg/storage/fs/localhome/localhome.go"                                                                    mapstructure:"drivers"`
-	DataServerURL                   string                            `docs:"http://localhost/data;The URL for the data server."                                                           mapstructure:"data_server_url"`
-	ExposeDataServer                bool                              `docs:"false;Whether to expose data server."                                                                         mapstructure:"expose_data_server"` // if true the client will be able to upload/download directly to it
-	AvailableXS                     map[string]uint32                 `docs:"nil;List of available checksums."                                                                             mapstructure:"available_checksums"`
-	CustomMimeTypesJSON             string                            `docs:"nil;An optional mapping file with the list of supported custom file extensions and corresponding mime types." mapstructure:"custom_mime_types_json"`
-	GatewaySvc                      string                            `mapstructure:"gatewaysvc"`
-	MinimunAllowedPathLevelForShare int                               `mapstructure:"minimum_allowed_path_level_for_share"`
-	SpaceInfoCacheDriver            string                            `mapstructure:"space_info_cache_type"`
-	SpaceInfoCacheTTL               int                               `mapstructure:"space_info_cache_ttl"`
-	SpaceInfoCacheDrivers           map[string]map[string]interface{} `mapstructure:"space_info_caches"`
-	ProvidesSpaceType               string                            `docs:"nil;Defines which type of spaces this storage provider provides (e.g. home, project, ...)."  mapstructure:"provides_space_type"`
+	MountPath                       string                    `docs:"/;The path where the file system would be mounted."                                                           mapstructure:"mount_path"`
+	MountID                         string                    `docs:"-;The ID of the mounted file system."                                                                         mapstructure:"mount_id"`
+	Driver                          string                    `docs:"localhome;The storage driver to be used."                                                                     mapstructure:"driver"`
+	Drivers                         map[string]map[string]any `docs:"url:pkg/storage/fs/localhome/localhome.go"                                                                    mapstructure:"drivers"`
+	DataServerURL                   string                    `docs:"http://localhost/data;The URL for the data server."                                                           mapstructure:"data_server_url"`
+	ExposeDataServer                bool                      `docs:"false;Whether to expose data server."                                                                         mapstructure:"expose_data_server"` // if true the client will be able to upload/download directly to it
+	AvailableXS                     map[string]uint32         `docs:"nil;List of available checksums."                                                                             mapstructure:"available_checksums"`
+	CustomMimeTypesJSON             string                    `docs:"nil;An optional mapping file with the list of supported custom file extensions and corresponding mime types." mapstructure:"custom_mime_types_json"`
+	GatewaySvc                      string                    `mapstructure:"gatewaysvc"`
+	MinimunAllowedPathLevelForShare int                       `mapstructure:"minimum_allowed_path_level_for_share"`
+	SpaceInfoCacheDriver            string                    `mapstructure:"space_info_cache_type"`
+	SpaceInfoCacheTTL               int                       `mapstructure:"space_info_cache_ttl"`
+	SpaceInfoCacheDrivers           map[string]map[string]any `mapstructure:"space_info_caches"`
+	ProvidesSpaceType               string                    `docs:"nil;Defines which type of spaces this storage provider provides (e.g. home, project, ...)."  mapstructure:"provides_space_type"`
 }
 
 func (c *config) ApplyDefaults() {
@@ -181,7 +181,7 @@ func registerMimeTypes(mappingFile string) error {
 }
 
 // New creates a new storage provider svc.
-func New(ctx context.Context, m map[string]interface{}) (rgrpc.Service, error) {
+func New(ctx context.Context, m map[string]any) (rgrpc.Service, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -720,7 +720,7 @@ func (s *service) TouchFile(ctx context.Context, req *provider.TouchFileRequest)
 		case errtypes.PermissionDenied:
 			st = status.NewPermissionDenied(ctx, err, "permission denied")
 		default:
-			st = status.NewInternal(ctx, err, "error touching file: "+req.Ref.String())
+			st = status.NewInternal(ctx, err, "error touching file "+req.Ref.String()+": "+err.Error())
 		}
 		return &provider.TouchFileResponse{
 			Status: st,
@@ -750,7 +750,7 @@ func (s *service) Delete(ctx context.Context, req *provider.DeleteRequest) (*pro
 		var st *rpc.Status
 		switch err.(type) {
 		case errtypes.IsNotFound:
-			st = status.NewNotFound(ctx, "path not found when creating container")
+			st = status.NewNotFound(ctx, "path not found when deleting container")
 		case errtypes.PermissionDenied:
 			st = status.NewPermissionDenied(ctx, err, "permission denied")
 		default:
@@ -811,6 +811,13 @@ func (s *service) addSpaceInfo(ctx context.Context, ri *provider.ResourceInfo, w
 	}
 	ri.ParentId.SpaceId = spaceID
 	ri.Id.SpaceId = spaceID
+	log.Debug().
+		Str("path", ri.Path).
+		Str("derived_space_id", spaceID).
+		Str("storage_id", ri.Id.StorageId).
+		Str("opaque_id", ri.Id.OpaqueId).
+		Bool("with_fetch", withFetch).
+		Msg("storageprovider: addSpaceInfo")
 
 	if s.spaceInfoCache != nil {
 		if space, err := s.spaceInfoCache.Get(spaceID); space != nil && err == nil {
@@ -1184,7 +1191,7 @@ func (s *service) ListFileVersions(ctx context.Context, req *provider.ListFileVe
 		case errtypes.PermissionDenied:
 			st = status.NewPermissionDenied(ctx, err, "permission denied")
 		default:
-			st = status.NewInternal(ctx, err, "error listing file versions: "+req.Ref.String())
+			st = status.NewInternal(ctx, err, "error listing file versions for "+req.Ref.String()+": "+err.Error())
 		}
 		return &provider.ListFileVersionsResponse{
 			Status: st,
@@ -1673,17 +1680,20 @@ func (s *service) unwrap(ctx context.Context, ref *provider.Reference) (*provide
 }
 
 func (s *service) trimMountPrefix(fn string) (string, error) {
-	if strings.HasPrefix(fn, s.mountPath) {
-		p := path.Join("/", strings.TrimPrefix(fn, s.mountPath))
+	if after, ok := strings.CutPrefix(fn, s.mountPath); ok {
+		p := path.Join("/", after)
 		return p, nil
 	}
 	return "", errtypes.BadRequest(fmt.Sprintf("path=%q does not belong to this storage provider mount path=%q", fn, s.mountPath))
 }
 
 func (s *service) wrap(ctx context.Context, ri *provider.ResourceInfo, prefixMountpoint bool) error {
+	log := appctx.GetLogger(ctx)
 	if ri == nil {
 		return nil
 	}
+	originalPath := ri.Path
+	originalOpaqueID := ri.Id.OpaqueId
 	if ri.Id.StorageId == "" {
 		// For wrapper drivers, the storage ID might already be set. In that case, skip setting it
 		ri.Id.StorageId = s.mountID
@@ -1695,6 +1705,14 @@ func (s *service) wrap(ctx context.Context, ri *provider.ResourceInfo, prefixMou
 		// TODO move mount path prefixing to the gateway
 		ri.Path = path.Join(s.mountPath, ri.Path)
 	}
+	log.Debug().
+		Str("storage_id", ri.Id.StorageId).
+		Str("opaque_id", originalOpaqueID).
+		Str("original_path", originalPath).
+		Str("final_path", ri.Path).
+		Bool("prefix_mountpoint", prefixMountpoint).
+		Str("mount_path", s.mountPath).
+		Msg("storageprovider: wrap ResourceInfo")
 
 	return nil
 }

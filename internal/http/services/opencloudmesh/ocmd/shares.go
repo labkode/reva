@@ -30,12 +30,11 @@ import (
 	"time"
 
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
-	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/pkg/errors"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
-	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
+	ocmincoming "github.com/cs3org/go-cs3apis/cs3/ocm/incoming/v1beta1"
 	ocmprovider "github.com/cs3org/go-cs3apis/cs3/ocm/provider/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 
@@ -77,27 +76,28 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, meshProvider, err := getIDAndMeshProvider(req.Sender)
-	log.Debug().Msgf("Determined Mesh Provider '%s' from req.Sender '%s'", meshProvider, req.Sender)
+	sender, err := GetUserIdFromOCMAddress(req.Sender)
 	if err != nil {
-		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, err.Error(), nil)
+		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, "error with remote sender", err)
 		return
 	}
 
+	// TODO(lopresti) here we extract the client IP from the request, but in case
+	// of a proxied request we should rather extract it from X-Forwarded-For or similar headers,
+	// or remove this logic altogether and rely on signed requests as per OCM standard
 	clientIP, err := utils.GetClientIP(r)
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorServerError, fmt.Sprintf("error retrieving client IP from request: %s", r.RemoteAddr), err)
 		return
 	}
 	providerInfo := ocmprovider.ProviderInfo{
-		Domain: meshProvider,
+		Domain: sender.Idp,
 		Services: []*ocmprovider.Service{
 			{
 				Host: clientIP,
 			},
 		},
 	}
-
 	providerAllowedResp, err := h.gatewayClient.IsProviderAllowed(ctx, &ocmprovider.IsProviderAllowedRequest{
 		Provider: &providerInfo,
 	})
@@ -110,14 +110,14 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shareWith, _, err := getIDAndMeshProvider(req.ShareWith)
+	shareWith, err := GetUserIdFromOCMAddress(req.ShareWith)
 	if err != nil {
-		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, "error with mesh provider", err)
+		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, "error with shareWith user", err)
 		return
 	}
 
 	userRes, err := h.gatewayClient.GetUser(ctx, &userpb.GetUserRequest{
-		UserId: &userpb.UserId{OpaqueId: shareWith}, SkipFetchingUserGroups: true,
+		UserId: &userpb.UserId{OpaqueId: shareWith.OpaqueId}, SkipFetchingUserGroups: true,
 	})
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorServerError, "error searching recipient", err)
@@ -128,18 +128,11 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	owner, err := getUserIDFromOCMUser(req.Owner)
+	owner, err := GetUserIdFromOCMAddress(req.Owner)
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, "error with remote owner", err)
 		return
 	}
-
-	sender, err := getUserIDFromOCMUser(req.Sender)
-	if err != nil {
-		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, "error with remote sender", err)
-		return
-	}
-
 	protocols, legacy, err := getAndResolveProtocols(ctx, req.Protocols, owner.Idp)
 	if err != nil || len(protocols) == 0 {
 		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, "error with protocols payload", err)
@@ -159,16 +152,16 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	createShareReq := &ocmcore.CreateOCMCoreShareRequest{
-		Description:  req.Description,
-		Name:         req.Name,
-		ResourceId:   req.ProviderID,
-		Owner:        owner,
-		Sender:       sender,
-		ShareWith:    userRes.User.Id,
-		ResourceType: getResourceTypeFromOCMRequest(req.ResourceType),
-		ShareType:    getOCMShareType(req.ShareType),
-		Protocols:    protocols,
+	createShareReq := &ocmincoming.CreateOCMIncomingShareRequest{
+		Description:        req.Description,
+		Name:               req.Name,
+		ResourceId:         req.ProviderID,
+		Owner:              owner,
+		Sender:             sender,
+		ShareWith:          userRes.User.Id,
+		SharedResourceType: getResourceTypeFromOCMRequest(req.ResourceType),
+		RecipientType:      getOCMShareType(req.ShareType),
+		Protocols:          protocols,
 	}
 
 	if req.Expiration != 0 {
@@ -177,8 +170,8 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Info().Any("req", createShareReq).Msg("CreateOCMCoreShare payload")
-	createShareResp, err := h.gatewayClient.CreateOCMCoreShare(ctx, createShareReq)
+	log.Info().Any("req", createShareReq).Msg("CreateOCMIncomingShare payload")
+	createShareResp, err := h.gatewayClient.CreateOCMIncomingShare(ctx, createShareReq)
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorServerError, "error creating ocm share", err)
 		return
@@ -198,29 +191,6 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-func getUserIDFromOCMUser(user string) (*userpb.UserId, error) {
-	id, idp, err := getIDAndMeshProvider(user)
-	if err != nil {
-		return nil, err
-	}
-	idp = strings.TrimPrefix(idp, "https://") // strip off leading scheme if present (despite being not OCM compliant). This is the case in Nextcloud and oCIS
-	return &userpb.UserId{
-		OpaqueId: id,
-		Idp:      idp,
-		// the remote user is a federated account for the local reva
-		Type: userpb.UserType_USER_TYPE_FEDERATED,
-	}, nil
-}
-
-func getIDAndMeshProvider(user string) (string, string, error) {
-	// the user is in the form of dimitri@apiwise.nl
-	split := strings.Split(user, "@")
-	if len(split) < 2 {
-		return "", "", errors.New("not in the form <id>@<provider>")
-	}
-	return strings.Join(split[:len(split)-1], "@"), split[len(split)-1], nil
-}
-
 func getCreateShareRequest(r *http.Request) (*NewShareRequest, error) {
 	var req NewShareRequest
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -238,26 +208,28 @@ func getCreateShareRequest(r *http.Request) (*NewShareRequest, error) {
 	return &req, nil
 }
 
-func getResourceTypeFromOCMRequest(t string) providerpb.ResourceType {
+func getResourceTypeFromOCMRequest(t string) ocm.SharedResourceType {
 	switch t {
 	case "file":
-		return providerpb.ResourceType_RESOURCE_TYPE_FILE
+		return ocm.SharedResourceType_SHARE_RESOURCE_TYPE_FILE
 	case "folder":
-		return providerpb.ResourceType_RESOURCE_TYPE_CONTAINER
+		return ocm.SharedResourceType_SHARE_RESOURCE_TYPE_CONTAINER
+	case "embedded":
+		return ocm.SharedResourceType_SHARE_RESOURCE_TYPE_EMBEDDED
 	default:
-		return providerpb.ResourceType_RESOURCE_TYPE_INVALID
+		return ocm.SharedResourceType_SHARE_RESOURCE_TYPE_INVALID
 	}
 }
 
-func getOCMShareType(t string) ocm.ShareType {
+func getOCMShareType(t string) ocm.RecipientType {
 	switch t {
 	case "user":
-		return ocm.ShareType_SHARE_TYPE_USER
+		return ocm.RecipientType_RECIPIENT_TYPE_USER
 	case "group":
-		return ocm.ShareType_SHARE_TYPE_GROUP
+		return ocm.RecipientType_RECIPIENT_TYPE_GROUP
 	default:
 		// for now assume user share if not provided
-		return ocm.ShareType_SHARE_TYPE_USER
+		return ocm.RecipientType_RECIPIENT_TYPE_USER
 	}
 }
 
@@ -278,6 +250,9 @@ func getAndResolveProtocols(ctx context.Context, p Protocols, ownerServer string
 			}
 		case "webapp":
 			uri = ocmProto.GetWebappOptions().Uri
+		case "embedded":
+			protos = append(protos, ocmProto)
+			continue
 		}
 
 		// If the `uri` contains a hostname, use it as is

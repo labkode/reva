@@ -44,10 +44,10 @@ type NotificationHelper struct {
 
 // Config contains the configuration for the Notification Helper.
 type Config struct {
-	NatsAddress string                 `docs:";The NATS server address."                          mapstructure:"nats_address"`
-	NatsToken   string                 `docs:";The token to authenticate against the NATS server" mapstructure:"nats_token"`
-	NatsStream  string                 `docs:"reva-notifications;The notifications NATS stream."  mapstructure:"nats_stream"`
-	Templates   map[string]interface{} `docs:"nil;Notification templates for the service."        mapstructure:"templates"`
+	NatsAddress string         `docs:";The NATS server address."                          mapstructure:"nats_address"`
+	NatsToken   string         `docs:";The token to authenticate against the NATS server" mapstructure:"nats_token"`
+	NatsStream  string         `docs:"reva-notifications;The notifications NATS stream."  mapstructure:"nats_stream"`
+	Templates   map[string]any `docs:"nil;Notification templates for the service."        mapstructure:"templates"`
 }
 
 func defaultConfig() *Config {
@@ -57,7 +57,7 @@ func defaultConfig() *Config {
 }
 
 // New creates a new Notification Helper.
-func New(name string, m map[string]interface{}, log *zerolog.Logger) *NotificationHelper {
+func New(name string, m map[string]any, log *zerolog.Logger) (*NotificationHelper, error) {
 	annotatedLogger := log.With().Str("service", name).Str("scope", "notifications").Logger()
 
 	conf := defaultConfig()
@@ -68,23 +68,23 @@ func New(name string, m map[string]interface{}, log *zerolog.Logger) *Notificati
 	}
 
 	if len(m) == 0 {
-		log.Info().Msgf("no 'notifications' field in service config, notifications will be disabled")
-		return nh
+		err := errors.New("no 'notifications' field in service config, notifications will be disabled")
+		return nil, err
 	}
 
 	if err := mapstructure.Decode(m, conf); err != nil {
-		log.Error().Err(err).Msgf("decoding config failed, notifications will be disabled")
-		return nh
+		err := errors.New("decoding config failed, notifications will be disabled")
+		return nil, err
 	}
 
 	if err := nh.connect(); err != nil {
-		log.Error().Err(err).Msgf("connecting to nats failed, notifications will be disabled")
-		return nh
+		err = errors.Wrap(err, "connecting to nats failed, notifications will be disabled")
+		return nil, err
 	}
 
 	nh.registerTemplates(nh.Conf.Templates)
 
-	return nh
+	return nh, nil
 }
 
 func (nh *NotificationHelper) connect() error {
@@ -134,7 +134,7 @@ func (nh *NotificationHelper) Stop() {
 	}
 }
 
-func (nh *NotificationHelper) registerTemplates(ts map[string]interface{}) {
+func (nh *NotificationHelper) registerTemplates(ts map[string]any) {
 	if len(ts) == 0 {
 		nh.Log.Info().Msg("no templates to register")
 		return
@@ -190,6 +190,7 @@ func (nh *NotificationHelper) registerTemplate(rr *template.RegistrationRequest)
 
 // RegisterNotification registers a notification in the notification service.
 func (nh *NotificationHelper) RegisterNotification(n *notification.Notification) {
+	nh.Log.Debug().Msgf("Registering notification %s", n.Ref)
 	if nh.js == nil {
 		nh.Log.Info().Msgf("notification registration skipped, helper is misconfigured")
 		return

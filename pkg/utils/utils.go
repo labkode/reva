@@ -58,7 +58,7 @@ var (
 	matchEmail    = regexp.MustCompile(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`)
 	// GlobalRegistry configures a service registry globally accessible. It defaults to a memory registry. The usage of
 	// globals is not encouraged, and this is a workaround until the PR is out of a draft state.
-	GlobalRegistry registry.Registry = memory.New(map[string]interface{}{})
+	GlobalRegistry registry.Registry = memory.New(map[string]any{})
 )
 
 func appendSlash(p string) string {
@@ -369,6 +369,8 @@ func GetViewMode(viewMode string) gateway.OpenInAppRequest_ViewMode {
 		return gateway.OpenInAppRequest_VIEW_MODE_READ_WRITE
 	case "preview":
 		return gateway.OpenInAppRequest_VIEW_MODE_PREVIEW
+	case "embedded":
+		return gateway.OpenInAppRequest_VIEW_MODE_EMBEDDED
 	default:
 		return gateway.OpenInAppRequest_VIEW_MODE_INVALID
 	}
@@ -385,6 +387,8 @@ func GetAppViewMode(viewMode string) appprovider.ViewMode {
 		return appprovider.ViewMode_VIEW_MODE_READ_WRITE
 	case "preview":
 		return appprovider.ViewMode_VIEW_MODE_PREVIEW
+	case "embedded":
+		return appprovider.ViewMode_VIEW_MODE_EMBEDDED
 	default:
 		return appprovider.ViewMode_VIEW_MODE_INVALID
 	}
@@ -434,6 +438,15 @@ func HasPermissions(target, toCheck *provider.ResourcePermissions) bool {
 func IsLightweightUser(u *userpb.User) bool {
 	return u.Id.Type == userpb.UserType_USER_TYPE_FEDERATED ||
 		u.Id.Type == userpb.UserType_USER_TYPE_LIGHTWEIGHT
+}
+
+// PrintOCMUserId returns a composed user id for federated users good for display purposes
+func PrintOCMUserId(u *userpb.UserId) string {
+	opaque := u.OpaqueId
+	if len(opaque) > 10 {
+		opaque = opaque[:8] + "..."
+	}
+	return opaque + " on " + u.Idp
 }
 
 // Cast casts a value `v` to the value `to`.

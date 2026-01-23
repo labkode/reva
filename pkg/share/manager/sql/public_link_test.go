@@ -11,16 +11,16 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/cs3org/reva/v3/pkg/appctx"
-	conversions "github.com/cs3org/reva/v3/pkg/cbox/utils"
+	"github.com/cs3org/reva/v3/pkg/permissions"
 	publicshare "github.com/cs3org/reva/v3/pkg/publicshare"
 )
 
 func setupSuiteLinks(tb testing.TB) (publicshare.Manager, error, func(tb testing.TB)) {
 	ctx := context.Background()
 	dbName := "test_db.sqlite"
-	cfg := map[string]interface{}{
-		"engine":  "sqlite",
-		"db_name": dbName,
+	cfg := map[string]any{
+		"db_engine": "sqlite",
+		"db_name":   dbName,
 	}
 	mgr, err := NewPublicShareManager(ctx, cfg)
 	if err != nil {
@@ -38,7 +38,7 @@ func setupSuiteLinks(tb testing.TB) (publicshare.Manager, error, func(tb testing
 func getTestPublicLinkGrant(password string) *link.Grant {
 	return &link.Grant{
 		Permissions: &link.PublicSharePermissions{
-			Permissions: conversions.IntTosharePerm(1, "file"),
+			Permissions: permissions.OcsPermissions(1).AsCS3Permissions(),
 		},
 		Password: password,
 		Expiration: &typespb.Timestamp{
